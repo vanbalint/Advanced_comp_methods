@@ -33,3 +33,5 @@ stick_and_snake <- function(noStick=100, noSnake=100, min=0, max=100, gradient=1
   }
   return(sas)
 }
+
+stick_and_snake()
