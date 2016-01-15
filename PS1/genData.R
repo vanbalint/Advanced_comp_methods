@@ -1,4 +1,3 @@
-library(ggplot2)
 stick_and_snake <- function(noStick=100, noSnake=100, min=0, max=100, gradient=1,
                             amplitude=0.2, wavelength=500, saveData=TRUE, savePlot=TRUE){
   #min, max and gradient are variables for both the stick and the snake
@@ -25,13 +24,15 @@ stick_and_snake <- function(noStick=100, noSnake=100, min=0, max=100, gradient=1
   if(saveData){ write.csv(sas, "dataset.csv")}
 
   if(savePlot){
-    
-    pdf("dataPlot.pdf")
-    ggplot(data=sas, aes(x = x, y = y, colour=stick_or_snake)) + 
-       geom_point()
+    pdf("./dataPlot.pdf")
+    plot(sas$x, sas$y, col=sas$stick_or_snake)
+#     ggplot(data=sas, aes(x = x, y = y, colour=stick_or_snake)) + 
+#        geom_point()
     dev.off()
   }
+  
   return(sas)
+  
 }
 
-stick_and_snake()
+#s <- stick_and_snake()
