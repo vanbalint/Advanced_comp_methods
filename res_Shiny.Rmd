@@ -1,0 +1,474 @@
+---
+title: "Advanced computational methods - Interactive vizualization with Shiny"
+author: "Hrvoje Stojic"
+date: "January 15, 2016"
+output:
+  html_document:
+    highlight: kate
+    theme: default
+    number_sections: yes
+  pdf_document:
+    fig_caption: no
+    highlight: kate
+    keep_tex: no
+    number_sections: yes
+    latex_engine: xelatex
+fontsize: 12pt
+documentclass: article
+sansfont: Roboto
+---
+
+
+```{r, knitr_options, cache=TRUE,  include=FALSE}
+    
+    # loading in required packages
+    if (!require("knitr")) install.packages("knitr"); library(knitr)
+    if (!require("rmarkdown")) install.packages("rmarkdown"); library(rmarkdown)
+
+    # some useful global defaults
+    opts_chunk$set(comment='##', warning=FALSE, message=FALSE, include=TRUE, echo=TRUE, cache=TRUE, cache.comments=FALSE)
+
+    # output specific defaults
+    output <- opts_knit$get("rmarkdown.pandoc.to")
+    if (output=="html") opts_chunk$set(fig.width=10, fig.height=5)
+    if (output=="latex") opts_chunk$set(fig.width=6,  fig.height=4)
+
+```
+
+
+```{r, Setup_and_Loading_Data, include=FALSE}
+
+    # cleaning before starting, for interactive session
+    # rm(list=ls())
+    # setwd("/home/hrvoje/Cloud/Teaching/BGSE_DS_AdvComputing_2016/source/")
+
+    # loading in required packages
+    if (!require("mvtnorm")) install.packages("mvtnorm"); library(mvtnorm)
+    if (!require("ggplot2")) install.packages("ggplot2"); library(ggplot2)
+
+```
+
+
+# Introduction
+
+This session focuses on dynamic visualization with the help R package Shiny. Figures are nice, but we can go further, we can illustrate our results in interactive web applications!  
+
+
+## Why interactive visualizations?
+
+> Achieving high prediction accuracy with a super-cool-new method is great, but without successful communication it is all for naught.   
+
+1. If you intend to work as a data scientist, as a rule you will have to report to others.  
+2. Our visual sensory system has the largest "bandwidth" of all our senses. You should leverage it to convey your messages better. With interactive visualization you can transmit much more information, but you can also influence to which aspects of your visualization the audience should pay attention to. It is much more than simple engineering.^[see excellent books by [Edward Tufte](http://www.edwardtufte.com/tufte/) on how to present visual information!]      
+3. Besides improving communication with our audience, interactive visualizations can improve our own understanding of the problem and the methods.  
+4. It's fun and eye catching!  
+
+
+## Why Shiny?
+
+- You need only R!  
+- For interactive visualizations nowadays you would use HTML and Javascript - Shiny hides almost all of it (although a bit of HTML/JS knowledge can come handy)! 
+
+
+
+# Developing a simple webapp with R package Shiny
+
+There is a nice gallery of examples on the shiny [website](http://shiny.rstudio.com/gallery/) and they are a good starting point. At the moment you can get some free slots on Shinyapps server [server](https://www.shinyapps.io/), but that is not a long term solution if you would use it a lot. You can install Shinyapps on your server, but you will need to learn a bit about servers etc. 
+
+
+
+## Hello World! example
+
+First make sure you have the following packages installed: `shiny` and `shinyapps`. If you want to deploy apps on RStudio's Shinyapps server, you will need `rsconnect` package as well.
+
+```
+install.packages("shiny")
+install.packages('devtools')
+library(shiny)
+install.packages("curl")
+install.packages("git2r")
+install.packages("httr")
+library(devtools)
+devtools::install_github('rstudio/shinyapps')
+devtools::install_github('rstudio/rsconnect')
+```
+
+Note that `devtools` package has to be version 1.4 or later.
+
+Web applications in shiny consist of two files: UI.R and Server.R. It can be done in a single file, which can come handy if you want to make a Shiny object a part of your .Rmd file. 
+
+Web applications in shiny consist of two files: UI.R and Server.R. Best way to learn it is to take a look at an [example](http://shiny.rstudio.com/gallery/kmeans-example.html). These are the UI.R and server.R from the "K means" example.
+
+You can also find it in `resource` folder in your Box folder under the name `appKmeans`.
+
+
+### ui.R
+
+```    
+shinyUI(
+    pageWithSidebar(
+
+        headerPanel('Iris k-means clustering'),
+
+        sidebarPanel(
+            selectInput('xcol', 'X Variable', names(iris)),
+
+            selectInput('ycol', 'Y Variable', names(iris),
+                    selected=names(iris)[[2]]),
+
+            numericInput('clusters', 'Cluster count', 3,
+                     min = 1, max = 9)
+        ),
+
+        mainPanel(
+            plotOutput('plot1')
+        )
+    )
+)
+```
+
+- `shinyUI()` function defines the user interface and has to be included in the ui.R file.  
+- `pageWithSidebar()` is one of the types of user interface layouts, there are many more of them, check the Shiny reference [page](http://shiny.rstudio.com/reference/shiny/latest/). A lot of these actually build on Boostrap designed HTML classes.  
+- user interface will usually consist of a part where a user provides an input (in this user layout it is sidebarPanel()), and a part where output produced by server.R is shown (here mainPanel())  
+- names of inputs and outputs have to be unique (here we have "xcol", "ycol", "clusters" and "plot1") - names are actually "id" tags in HTML, they serve as unique identifiers of crucial HTML elements  
+
+
+### server.R
+
+```
+# defining better colors
+palette(c("#E41A1C", "#377EB8", "#4DAF4A", "#984EA3",
+  "#FF7F00", "#FFFF33", "#A65628", "#F781BF", "#999999"))
+
+# Define server logic required to draw the plot
+shinyServer(function(input, output, session) {
+
+    # Combine the selected variables into a new data frame
+    selectedData <- reactive({
+        iris[, c(input$xcol, input$ycol)]
+    })
+
+    clusters <- reactive({
+        kmeans(selectedData(), input$clusters)
+    })
+
+    output$plot1 <- renderPlot({
+        par(mar = c(5.1, 4.1, 0, 1))
+        plot(selectedData(),
+            col = clusters()$cluster,
+            pch = 20, cex = 3)
+            points(clusters()$centers, pch = 4, cex = 4, lwd = 4)
+    })
+
+})
+```
+
+- Function `shinyServer(function(input, output) {...})` defines the computations done on the server side, which produce the output shown on the user interface, it has to be included in the `server.R` file.  
+- `input` argument to the function is a list by which all the user inputs are forwarded to the server part, e.g. user specified number of bins on a slider, which is captured by `bins` variable in the `ui.R`, so the server can access this value through `input$bins`.
+
+
+### Running locally
+
+Within R we can launch an app locally by navigating first to the directory where our application is located and then running the following command: `shiny::runApp()`. This will open the application in a browser or simply give you an URL (you should see something like 127.0.0.1:1234, this is the URL pointing to your own computer). In RStudio you get a nice button called "run App" once you open server.R or ui.R, and it does everything automatically. 
+
+After opening it in a browser try opening the "developer tools" or "inspect element" in your browser and examine the HTML itself. You will notice that Shiny heavily relies on [Boostrap](http://getbootstrap.com/). Boostrap is a Javascript library aimed at cross-platform compatibility and adjustment to various devices that are nowadays used for accessing the internet - desktops, tablets, mobile phones.
+
+
+### Deploying publicly 
+
+To deploy it publicly, you will need to set up an account on [Shinyapps](http://www.shinyapps.io/) or install [Shiny Server](https://github.com/rstudio/shiny-server/blob/master/README.md) on your own server. 
+
+In the former case, after signing up and setting an account (you have to set up tokens, follow the instructions on Shinyapps part of Shiny webpage!), you would deploy your app by navigating to your application directory and running `rsconnect::deployApp(appName="app")`. Note, you need to be inside the app folder. In RStudio you have a nice button for the same action - "Publish".
+
+There are similar commands for terminating and modifying the configuration of your app, e.g. using an extra large multiple core instance. Check the Shinyapps [documentation](http://shiny.rstudio.com/articles/shinyapps.html). 
+
+
+--------
+
+
+## Slightly more complex example - Illustrating random distributions
+
+In this app you can see an example of how to use conditional user interface structures, i.e. depending on some of their inputs, other options appear. It also shows some other features, like tabsets, how to add arbitrary HTML text or load an external document written in Markdown, etc.^[The example is a simplified version of a Shiny application that found on Internet, unfortunately the link does not work anymore.]
+
+You can find it in the `resource` folder in your Box folder under the name `appDistributions`.
+
+
+### ui.R
+
+```    
+shinyUI(
+    
+    # we use a simple user layout
+    pageWithSidebar(
+        headerPanel(
+            # we use some custom HTML for the text above the application
+            HTML("<h1>Introduction to Shiny</h1><br>")
+        ),
+    
+        sidebarPanel(
+            wellPanel( 
+                radioButtons("distType", "Distribution type:",
+                    list("Discrete", "Continuous"),
+                    selected="Discrete") 
+            ),
+
+            # this input is served based on distType input
+            wellPanel(  
+                uiOutput("distName") 
+            ),
+            wellPanel(
+                numericInput("n","Sample size:",200),
+
+                # this input is served based on distName input
+                uiOutput("distPar1"),
+                uiOutput("distPar2")
+            ),
+
+            wellPanel(
+                downloadButton("downloadPlot", "Download Figure")
+            )
+        ),
+
+        mainPanel(
+
+            # illustrating tabset panel
+            tabsetPanel(
+                tabPanel("Plot", plotOutput("plot", height="auto")),
+                tabPanel("Summary", verbatimTextOutput("summary")),
+                tabPanel("Table", tableOutput("table")),
+                tabPanel("About",includeMarkdown("includeSomeExternalText.md"))
+            )
+        )
+    )  # END of pageWithSidebar  
+) # END of shinyUI       
+```
+
+
+### server.R
+
+```
+# loading libraries
+library(ggplot2)
+library(scales)
+
+
+shinyServer(function(input,output){
+
+    n.default <- 500
+
+    rbern <- function(n=n.default,bern.prob=0.5){ 
+        rbinom(n=n,size=1,prob=bern.prob) }
+    rbinom2 <- function(n=n.default,binom.size=10,binom.prob=0.5){ 
+        rbinom(n,size=binom.size,prob=binom.prob) }
+    rbeta2 <- function(n=n.default,beta.shape1=2,beta.shape2=2){ 
+        rbeta(n,shape1=beta.shape1,shape2=beta.shape2) }
+
+    # serving user controls depending on the value of the type of 
+    # distribution, note that the name of the output has to match
+    # the UI input name - distName
+    output$distName <- renderUI({
+        if(input$distType=="Discrete"){
+            # discrete
+            radioButtons("dist","Distribution:", 
+                selected="bern",
+                list("Bernoulli"="bern",
+                     "Binomial"="bin") 
+            )
+        } else if(input$distType=="Continuous"){
+            # continuous
+            radioButtons("dist","Distribution:", 
+                selected="beta",
+                list("Beta"="beta",
+                     "Normal"="norm",
+                     "Uniform"="unif")
+            )
+        }
+    })
+    
+    # generating data depending on user defined distribution    
+    genData <- reactive({
+
+        #input <- list();input$dist <- "bern"; 
+        #input$bern.prob <- 0.2; input$n <- 20;
+        dist <- switch(input$dist,
+            # discrete
+            bern=rbern, 
+            bin=rbinom2, 
+            # continuous
+            beta=rbeta2, 
+            norm=rnorm, 
+            unif=runif
+            )
+
+        defaultArgs <- switch(input$dist,
+            # discrete
+            bern=c(input$bern.prob),
+            bin=c(input$binom.size, input$binom.prob),
+            # continuous
+            beta=c(input$beta.shape1, input$beta.shape2),
+            norm=c(input$mean,input$sd),
+            unif=c(input$min,input$max),
+            )
+
+        f <- formals(dist)
+        f <- f[names(f)!="nn" & names(f)!="n"]
+        len <- min(length(f),3-1); 
+        f <- f[1:len] 
+        argList <- list(n=input$n)
+        for(i in 1:len) argList[[names(f)[i]]] <- defaultArgs[i]
+
+        finalOutput <- list(data=do.call(dist, argList), argNames=names(f))
+        cat("finalOutput", finalOutput$argNames, "\n")
+        return(finalOutput)
+    })
+    
+    # we serve the distribution parameters depending on the distName input
+    # argument, here presented as dist argument as it was served by renderUI
+    output$distPar1 <- renderUI({
+        isolate({
+            if(length(input$dist)) {
+                label <- switch(input$dist,
+                    # discrete
+                    bern="Probability:", 
+                    bin="Size:", 
+                    # continuous
+                    beta="Alpha:", 
+                    norm="Mean:", 
+                    unif="Minimum:"
+                    )
+                initialPar <- switch(input$dist,
+                    # discrete
+                    bern=0.5, 
+                    bin=10, 
+                    # continuous
+                    beta=2, 
+                    norm=0, 
+                    unif=0
+                    )
+                cat(initialPar, "\n")
+                numericInput(genData()$argNames[1], label, initialPar)
+            }
+        })
+    })
+    output$distPar2 <- renderUI({
+        isolate({
+            if(length(input$dist)){
+                label <- switch(input$dist,
+                    bin="Probability:", 
+                    beta="Beta:", 
+                    norm="Standard deviation:", 
+                    unif="Maximum:"
+                    )
+                initialPar <- switch(input$dist,
+                    bin=0.5, 
+                    beta=2, 
+                    norm=1, 
+                    unif=1
+                    )
+                # we sevre the second argument only if there is one,
+                # e.g. bernoulli has only one
+                if(any(input$dist==c("bin", "beta", "norm","unif"))) {
+                    numericInput(genData()$argNames[2], label, initialPar)
+                } 
+            }
+        })
+    })
+    
+    # creating a function for generating the plot
+    # it will be used below for generating the plot output    
+    generatePlot <- function() {
+        
+        # conditional statement is here for serving the output only if
+        # dist input argument has a value, prevents serving unhelpful 
+        # errors to users
+        if(length(input$dist)) {
+            
+            # generating the data
+            data <- data.frame(rdraws=genData()$data)
+
+            # prettyfying the ggplot figure
+            mytheme <- theme(axis.line = element_line(colour = "black"),
+                    panel.grid.major = element_blank(),
+                    panel.grid.minor = element_blank(),
+                    panel.border = element_blank(),
+                    panel.background = element_blank(),
+                    axis.text = element_text(size=14, colour = "black"),
+                    axis.title=element_text(size=16,face="bold"),
+                    axis.title.y = element_text(vjust = 1.8),
+                    axis.title.x = element_text(vjust = -0.8))
+
+            # different plot functions needed depending on the type 
+            # of distribution
+            if(input$distType=="Discrete"){
+                plot <- ggplot(data, aes(x = factor(rdraws))) + 
+                geom_bar(aes(y = (..count..)/sum(..count..)), 
+                         fill="#660066", colour="black") + 
+                scale_y_continuous(labels = percent) + 
+                mytheme +
+                xlab("Observations") +
+                ylab("Density")
+                return(plot)
+            } else if(input$distType=="Continuous"){
+                plot <- ggplot(data, aes(x = rdraws)) + 
+                geom_histogram(aes(y = ..density..), 
+                               colour = "black", 
+                               fill = "#660066") + 
+                mytheme +
+                xlab("Observations") +
+                ylab("Density") 
+                return(plot)
+            }
+        }
+    }
+    
+    # serving the plot to the user
+    output$plot <- renderPlot({
+        generatePlot()}, height=500, width=750
+    )
+    
+    # serving the plot for the download
+    output$downloadPlot <- downloadHandler(
+        filename = 'currentPlot.pdf',
+        content = function(file){
+            pdf(file)
+            print(generatePlot())
+            dev.off()
+        }
+    )
+
+    # serving the summary of the data    
+    output$summary <- renderPrint({
+        summary(genData()$data)
+    })
+    
+    # serving the table of the data, only 100 observations    
+    output$table <- renderTable({
+        head(data.frame(x=genData()$data), 100)
+    })
+
+})
+```
+
+### DESCRIPTION
+
+When uploading your web application to the server you would want to place some metadata to your web application (HTML header) so that web crawler can tag your web application, which then makes it easier to find on the Internet. Here you would also indicate that it should be in a Showcase mode where code is displayed as well.
+
+DESCRIPTION file
+
+```
+Title: Random draws!
+Author: Hrvoje Stojic
+AuthorUrl: http://www.econ.upf.edu/~hstojic/
+License: GPL-3
+DisplayMode: Showcase
+Tags: Random variable distributions
+Type: Shiny
+```
+
+
+# "Alternatives" to Shiny  
+
+1. [plotly](https://plot.ly/) - Language independent data visualization, together with hosting and data. Aimed at achieving the ideal of reproducibility.  
+2. [D3](http://d3js.org/) - Powerful Javascript library for interactive graphics in HTML. It is quite versatile, but there is a rather steep learning curve to get to the basic level. There are some R packages that create basic type of interactive graphics in D3, take a look at the [R2D3](http://www.coppelia.io/2014/08/introducing-r2d3/).  
+3. [Google Charts](https://developers.google.com/chart/) - famous Hans Rosling [TED talk](http://www.ted.com/talks/hans_rosling_shows_the_best_stats_you_ve_ever_seen) few years ago featured moving charts that nicely illustrated evolution of some indicators over time (e.g. infant mortality and GDP in the world over time). Finally, Google bought the visualization libraries and improved them. There is an R package that facilitated creating such charts with R - [googleVis](https://github.com/mages/googleVis), and it can be used within Shiny as well (albeit not without issues).  
+

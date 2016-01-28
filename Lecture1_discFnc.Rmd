@@ -1,0 +1,503 @@
+---
+title: "Advanced computational methods - Lecture 1"
+author: "Hrvoje Stojic"
+date: "January 8, 2016"
+output:
+  html_document:
+    highlight: kate
+    theme: default
+    number_sections: yes
+  pdf_document:
+    fig_caption: no
+    highlight: kate
+    keep_tex: no
+    number_sections: yes
+    latex_engine: xelatex
+fontsize: 12pt
+documentclass: article
+sansfont: Roboto
+---
+
+
+```{r, knitr_options, cache=TRUE,  include=FALSE}
+    
+    # loading in required packages
+    if (!require("knitr")) install.packages("knitr"); library(knitr)
+    if (!require("rmarkdown")) install.packages("rmarkdown"); library(rmarkdown)
+
+    # some useful global defaults
+    opts_chunk$set(comment='##', warning=FALSE, message=FALSE, include=TRUE, echo=TRUE, cache=TRUE, cache.comments=FALSE)
+
+    # output specific defaults
+    output <- opts_knit$get("rmarkdown.pandoc.to")
+    if (output=="html") opts_chunk$set(fig.width=10, fig.height=5)
+    if (output=="latex") opts_chunk$set(fig.width=6,  fig.height=4)
+
+```
+
+
+```{r, Setup_and_Loading_Data, include=FALSE}
+
+    # cleaning before starting, for interactive session
+    # rm(list=ls())
+    # setwd("/home/hrvoje/Cloud/Teaching/BGSE_DS_AdvComputing_2016/Lecture1_discFunctions/")
+
+    # loading in required packages
+    if (!require("mvtnorm")) install.packages("mvtnorm"); library(mvtnorm)
+    if (!require("ggplot2")) install.packages("ggplot2"); library(ggplot2)
+
+```
+
+
+# Introduction
+
+This session introduces basic parametric method for classification that relies on linear regression.
+
+
+## Using .Rmd documents
+
+In the files for this session you will find a source file of this document with .Rmd extension. To use these files simply open them as you would open any other R script. Rmd stands for rmarkdown, a combination of R code and lowly formatted text (this is why it is called mark*down*). 
+
+To be able to build PDF, HTML and other types of documents from it you need to install [Rmarkdown](http://rmarkdown.rstudio.com/) and [knitr](http://yihui.name/knitr/) packages. If you use RStudio there are buttons that build documents automatically, while if you are using a text editor you will need to run a specific command. For example, open a terminal in the folder containing the .Rmd file and run `R -e 'library(knitr);library(rmarkdown);rmarkdown::render("file_name.Rmd", "html_document")'`. Note that PDF output (including Beamer slides) requires a full installation of TeX.
+
+
+**Why knitr or Rmarkdown?**  
+
+- **Reproducibility**: 
+    - It makes your data analysis more reproducible. The R code describes exactly the steps from the raw data to the final report. This makes it perfect for sharing reports with your colleagues.   
+    - It is written with almost no formatting at all (markdown), which makes it easier to convert to any other format, from nicely looking PDFs to the all-present MS docx and complete HTML documents (fancy a blog?).     
+- **Efficiency**: 
+    - Statistical output from figures to tables is automatically placed in your report. No more copy-pasting and reformatting the output from your statistical analysis program into your report.  
+    - You want to use a slightly different subset of the data? You want to drop that outlier observation? No problem, you can update your report with a single click instead of updating every table and figure.  
+    - Whoever has done some copy-pasting knows how easy is to overlook one number or one figure. This type of document also significantly reduces the chance of such errors.   
+- **Education & Communication**: 
+    - Excellent for teaching as one can check how exactly is some analysis done from the report.  
+    - Do not disregard this aspect, look at Github and Stackoverflow stars who get job offers on this account!  
+
+Note that I used a different font in the document than the default. To use different fonts in your documents, in the header of the .Rmd file, under pdf_document you need to set "latex_engine: xelatex", and then instead of "sansfont: Arial" use whatever font you have available to Tex system on your computer (usually whatever fonts are available on your computer).
+
+--------
+
+
+
+# Discriminant functions a.k.a. Linear probability models
+
+
+## Simple categorization problem
+
+To illustrate discriminant functions we will use a simple artificial dataset - two dimensional data with two categories - whether a loan in the bank will be denied or approved, with two observed variables, payment-to-income ratio and solvency score.
+
+We will assume that bot variables normally distributed variables, not necessarily independent from each other. For more general m-dimensional case we can write it as follows: 
+
+$$ N(\mathbf{x}|\mathbf{\mu},\Sigma) = \frac{1}{ (2\pi)^{D/2} |\Sigma|^{1/2} } exp\{ \frac{1}{2}(\mathbf{x}-\mathbf{\mu})^T \Sigma^{-1} ( \mathbf{x} -\mathbf{\mu}) \} $$
+
+where $\mathbf{x}$ is m-dimensional vector, $\Sigma$ is positive-definite covariance matrix and $\mathbf{\mu}$ is a vector of means. Since we have a 2-dimensional case our joint distribution is governed by the following parameters:
+
+$$ \boldsymbol\mu = \begin{pmatrix} \mu_x \\ \mu_y \end{pmatrix}, \quad
+    \boldsymbol\Sigma = \begin{pmatrix} \sigma_x^2 & \rho \sigma_x \sigma_y \\
+                             \rho \sigma_x \sigma_y  & \sigma_y^2 \end{pmatrix} $$
+
+where $\rho$ is correlation between $X$ and $Y$.
+
+We use the R package `mvtnorm` to draw (pseudo)-random numbers from such joint normal distribution (read the docs [here](http://cran.r-project.org/web/packages/mvtnorm/index.html)). 
+
+
+```{r, MVN_example_simple}
+    
+# simple example with uncorrelated variables 
+set.seed(7851)
+x <- rmvnorm(n=100, mean=c(1,5), sigma=1*diag(2))
+plot(x[, 1], x[, 2], col = "blue", xlab = "PIratio", ylab = "solvency")
+title("PI ratio and solvency - drawn\nfrom bivariate normal distribution")
+
+```
+
+
+You might have noticed that sometimes figures produced by R when saved in PDF format do not display correctly. This is because it does not embed fonts into PDF when it is generated. PDF viewers and client systems that lack the font you have used will substitute it with some other font. Actually, Helvetica, default font used in R is not present in many open source PDF viewers and operating systems. You will usually want to make sure that your users will be able to see the figure correctly. Below I show you how to embed fonts via `extrafont` package (another alternative is `showtext` package). Moreover, with this package you can expand the number of fonts you can use in your figures.
+
+
+
+```{r, MVN_example_simple_fonts}
+  
+# embedding fonts into our pdf figures
+if (!require("extrafont")) install.packages("extrafont"); library(extrafont)
+
+# importing fonts from your OS into R, need to be run only once
+# font_import()
+# show fonts available
+# fonts()  # or fonttable()
+
+# load the fonts into R session
+loadfonts()
+
+# you would then embed fonts as follows
+pdf("plot_embedded_fonts.pdf", family="Arial", width=4, height=4.5)
+plot(x[, 1], x[, 2], col = "blue", xlab = "PIratio", ylab = "solvency")
+title("PI ratio and solvency - drawn\nfrom bivariate normal distribution")
+dev.off()
+embed_fonts("plot_embedded_fonts.pdf")
+
+# however, rmarkdown does that automatically, how can we instruct it 
+# to embed fonts?
+# 1. we need to change the device to cairo_pdf(), this device can 
+#    automatically embed fonts into PDF plots, normal pdf() cannot
+# 2. we add dev.args family argument in the chunk specs
+if (output=="latex") {
+    opts_chunk$set(dev = 'cairo_pdf', 
+    dev.args=list(family="Arial"))
+}
+
+```
+
+```{r, MVN_example_simple_fonts_cont}
+
+# now plot the figure as usual
+plot(x[, 1], x[, 2], col = "blue", xlab = "PIratio", ylab = "solvency")
+title("PI ratio and solvency - drawn\nfrom bivariate normal distribution")
+
+```
+
+If you need to draw a *really* high dimensional data (>1000), drawing them with the help of `mvtnorm` package might be too slow. There are `Rcpp` implementations that are faster (see for an example [here](http://stackoverflow.com/questions/22738355/efficiently-radomly-drawing-from-a-multivariate-normal-distribution))
+
+In the figure above PIratio and solvency were uncorrelated, but this is often not realistic. Let us use `mvtnorm` to draw samples for which covariance terms in the $\Sigma$ matrix are not zero. 
+
+
+```{r, MVN_example_corr}
+  
+# create small wrapper functions
+sigmaXY <- function(rho, sdX, sdY) {
+    covTerm <- rho * sdX * sdY
+    VCmatrix <- matrix(c(sdX^2, covTerm, covTerm, sdY^2), 
+                       2, 2, byrow = TRUE)
+    return(VCmatrix)
+}
+
+genBVN <- function(n = 1, seed = NA, muXY=c(0,1), sigmaXY=diag(2)) {
+    if(!is.na(seed)) set.seed(seed)
+    rdraws <- rmvnorm(n, mean = muXY, sigma = sigmaXY)
+    return(rdraws)
+}
+
+# correlation is slightly negative
+sigmaXY(rho=-0.1, sdX=1, sdY=20)
+
+# highly positive
+sigmaXY(rho=0.8, sdX=2, sdY=30)
+
+# creating a function for all of this
+loanData <- function(noApproved, noDenied, muApproved, muDenied, sdApproved, 
+                        sdDenied, rhoApproved, rhoDenied, seed=1111) {
+    sigmaApproved <- sigmaXY(rho=rhoApproved, sdX=sdApproved[1], sdY=sdApproved[2])
+    sigmaDenied <- sigmaXY(rho=rhoDenied, sdX=sdDenied[1], sdY=sdDenied[2])
+    approved <- genBVN(noApproved, muApproved, sigmaApproved, seed = seed)
+    denied <- genBVN(noDenied, muDenied, sigmaDenied, seed = seed+1)
+    loanDf <- as.data.frame(rbind(approved,denied))
+    deny <- c(rep("Approved", noApproved), rep("Denied", noDenied))
+    target = c(rep(0, noApproved), rep(1, noDenied))
+    loanDf <- data.frame(loanDf, deny, target)
+    colnames(loanDf) <- c("PIratio", "solvency", "deny", "target")
+    return(loanDf)
+}
+
+# generating some data
+loanDf <- loanData(noApproved=50, noDenied=50, c(4, 150), c(10, 100), 
+                   c(1,20), c(2,30), -0.1, 0.6, 1221)
+
+# illustrating the data, note that with ggplot we need to additionally 
+# specify font family
+ggplot(data = loanDf, 
+       aes(x = solvency, y = PIratio, colour=deny, fill=deny)) + 
+geom_point() +
+xlab("solvency") +
+ylab("PIratio") +
+theme_bw() +
+theme(text=element_text(family="Arial"))
+
+```
+
+We use [ggplot](http://ggplot2.org/) package from now on for producing figures - one of amazing set of R packages developed by [Hadley Wickham](http://had.co.nz/), today a chief scientist at RStudio. (some other really useful packages he is developing are [dplyr](https://github.com/hadley/dplyr), [reshape](https://github.com/hadley/reshape), [httr](https://github.com/hadley/httr), [assertthat](https://github.com/hadley/assertthat)).
+
+
+
+## Econometric perspective - Linear probability model 
+
+Recall the linear regression model:
+
+$$ y(\mathbf{x}) = \mathbf{w}^T \mathbf{x} + w_0. $$
+
+Using Ordinary Least Squares in a problem where variable we are trying to predict takes only two values, 0 and 1, is called **Linear probability model** (LPM). Let us apply it first to our newly created dataset and later on we will worry about the consequences.
+
+
+
+```{r, LPM}
+    
+# illustrating the dependence of deny on PIratio variable
+ggplot(data = loanDf, 
+       aes(x = PIratio, y = target)) + 
+geom_point() +
+geom_smooth(method = "lm") +
+scale_x_continuous("PIratio", limit = c(1, 16), 
+                   breaks = seq(1, 16, 1), expand = c(0, 0)) +
+scale_y_continuous("deny", limit = c(-0.4, 1.8), 
+                   breaks = seq(-0.4, 1.8, 0.2), 
+                   expand = c(0, 0)) +
+geom_hline(yintercept = 0, size = 0.3, linetype = 2) +
+annotate("text", x = 13, y = 0.1, label = "Approved", family = "Arial",
+         size = 3.15) +
+geom_hline(yintercept = 1, size = 0.3, linetype = 2) +
+annotate("text", x = 3, y = 1.1, label = "Denied", family = "Arial",
+         size = 3.15) +
+geom_hline(yintercept = 0.5, size = 0.3, linetype = 2) +
+annotate("text", x = 13, y = 0.6, label = "Threshold", family = "Arial",
+         size = 3.15) +
+theme_bw() +
+theme(text = element_text(family = "Arial"))
+
+# running the linear regression on our dataset, 
+# but only on PIratio variable and intercept
+datafit <- lm(target ~ PIratio + 1, data = loanDf)
+summary(datafit)
+
+```
+
+First question that you might ask is what does it mean to fit a line to a binary variable? How is this different than a regression with a continuous regressand?
+
+Let us look at the figure. The scatterplot looks different than usual regression scatterplots due to our binary variable. Still, the figure seems to show there is a positive relationship between *PIratio* of a client and a loan being *denied*: very few clients with payment-to-income ratio below 6 are denied the loan, while above it most are denied. The line depicts the predicted value of *deny* as a function of PIratio. For example, when PI ratio is 5, the predicted value of deny is `r round(predict(datafit, data.frame(PIratio=5)), 2)`. What does that value mean?
+
+Recall that regression is expectation, namely $E(Y|X_1,...,X_k)$, and when expressed in terms of outcomes and probabilities we get the following expression
+
+$$E(Y|X_1,...,X_k)=0 \times P(Y=0|X_1,...,X_k) + 1 \times P(Y=1|X_1,...,X_k)$$
+
+Hence, for a binary variable $E(Y|X_1,...,X_k) = P(Y=1|X_1,...,X_k)$, the predicted value from regression is the probability that Y=1, given X. Following this we can interpret the value of `r round(predict(datafit, data.frame(PIratio=5)), 2)` as follows - when PI ratio is 5, the estimated probability of being denied a loan is about `r round(predict(datafit, data.frame(PIratio=5)), 2)*100`\%, as computed with the help of coefficients: $P(Y="Denied"|PI ratio)=`r coef(datafit)[1]` + 5 \times `r coef(datafit)[2]`$.
+
+How do we interpret coefficients from the regression? In a similar manner, unit change in PI ratio is associated with a change of `r round(coef(datafit)[2], 2)` in probability that $Y=1$, i.e. that the loan is denied.
+
+One of the advantages of applying OLS in this situation is that we are working with familiar framework where coefficients are easy to interpret. However, there are shortcomings. Even though in this course we will mostly be concerned with predictions, if you are interested in causal estimates you should be careful with standard errors with LPM. With binary dependent variable errors are always [heteroscedastic](https://en.wikipedia.org/wiki/Heteroscedasticity). Standard errors computed above assume homoscedasticity by default and are incorrect, and so are p-values computed based on them. $R^2$ statistic is uninterpretable in this scenario - all data cannot possibly correspond to the predicted line. Finally, note that there are predicted values larger than 1 and smaller than 0 - these obviously cannot be probabilities! LPM can only provide you with an approximation of probabilities, predicted values have to be transformed in a nonlinear fashion to conform to real probabilities, and this the role of probit/logit transformation. In practice, differences between LPM and logit/probit regression might not be that big, especially if there is very few extreme values of the regressors.
+
+
+
+## Machine learning perspective - Discriminant functions
+
+Bishop distinguishes between three type of classification models, depending on how do they solve the decision problem that we are ultimately interested in (e.g. does a patient has a disease or not, given some evidence):
+
+1. Discriminant Functions 
+2. Probabilistic Discriminative Models
+3. Probabilistic Generative Models
+
+Discriminant Functions solve the decision problem directly, they learn the mapping between inputs to decisions (class labels). Probabilistic approaches on the other hand break the decision problem into an **inference stage** and **decision stage**. They solve the inference stage by producing posterior probabilities that the modeler can later on combine in the decision stage as he desires. Probabilistic approaches are that way more flexible. If the costs change, it is easier to update decisions based on probabilistic models. Discriminant functions have to be retrained. Probabilistic models differ in terms how they estimate posterior class probabilities - discriminative models directly model the posteriors, while generative models do it by modeling the likelihoods and priors. Check section 1.5 of Bishop for more details on pros and cons of each approach.
+
+Let us go back now to discriminant functions. Strictly speaking discriminant function is the same as LPM, but in machine learning they think about it in a somewhat different manner - they focus much more on decision boundaries. This is useful way to think about categorization and we will use discriminant functions to introduce it.
+
+We convert fitted values $\hat{y}(\mathbf{x})$ to fitted classes variable $\hat{C}$ by the following rule: "Approved" if $\hat{y}(\mathbf{x})<0.5$, "Denied" if $\hat{y}(\mathbf{x})>0.5$.
+
+Why 0.5? It is a simple rationale - as soon as predicted probability for one class is greater than 0.5 we should always choose that class. In some cases you might want to modify the threshold, for example, when we have a problem where one class is very rare
+
+
+Estimated coefficients give us a solution to the following equation:
+
+$$ w_{PIratio} x_{PIratio} + w_{solvency} x_{solvency} + w_0 = 0.5 $$ 
+
+All inputs that satisfy this equation form the boundary. To visualize the boundary in PIratio/solvency coordinates we have to transform the solution
+
+$$ x_{PIratio} = - \frac{w_{solvency}}{w_{PIratio}} x_{solvency} + \frac{0.5 - w_0}{w_{PIratio}} $$ 
+
+We use this equation to create points for plotting the boundary. Points on this line are neither in one nor the other category. 
+
+
+```{r, discFnc}
+    
+# simply running the linear regression on our animals dataset
+datafit <- lm(target ~ solvency + PIratio + 1, data=loanDf)
+summary(datafit)
+
+# grabbing the coefficients
+weights <- coef(datafit)[c("solvency", "PIratio")]
+bias <- coef(datafit)[1]
+
+# assigning labels
+head(predict(datafit))
+sum(predict(datafit)>0.5)
+
+# Computing the boundary: since it is a 2-dimensional example the boundary 
+# is a line. 
+intercept <- (-bias + 0.5)/weights["PIratio"]
+slope <- -(weights["solvency"]/weights["PIratio"])
+
+# illustrating the data, now with the boundary, we use geom_abline(), 
+# this will work only for lines
+ggplot(data = loanDf, aes(x = solvency, y = PIratio, 
+       colour=deny, fill=deny)) + 
+geom_point() +
+xlab("solvency") +
+ylab("Weight") +
+theme_bw() +
+theme(text=element_text(family="Arial")) +
+geom_abline(intercept = intercept, slope = slope)
+
+# when plotting, a more general solution is to use geom_line()
+x <- seq(min(loanDf["PIratio"]), max(loanDf["PIratio"]), 
+         length.out = nrow(loanDf))
+y <- -(weights["PIratio"]/weights["solvency"])*x + 
+    (0.5-bias)/weights["solvency"]
+
+# careful, colnames have to match!
+boundaryDf <- data.frame(PIratio=x, solvency=y, 
+                         deny=rep("Boundary", length(x)))
+
+# now plotting again, but with geom_line(), and we create a plot function, 
+plotDiscFnc <- function() {
+    ggplot(data = loanDf, 
+           aes(x = solvency, y = PIratio, colour=deny)) + 
+    geom_point() +
+    xlab("solvency") +
+    ylab("PI ratio") +
+    theme_bw() + 
+    geom_line(data=boundaryDf) + 
+    scale_color_manual("", 
+                       values = c("Boundary" = "grey", 
+                        "Approved" = "blue", "Denied" = "red"))
+}
+plotDiscFnc()
+
+```
+
+
+### Confusion matrix
+
+Let us create a slightly harder categorization problem where distributions overlap to some extent, to illustrate the usage of confusion matrices. Confusion matrices are often used to illustrate the performance of the classification algorithm. They give more detailed insight in what way the algorithm errs. This might be particularly relevant if the costs of errors are asymmetric. For example, in health diagnostics false negatives are much more costly than false positives. Hence, you would tolerate high misclassification rate on false positives, but not false negatives.
+
+
+```{r, MVN_discFnc_overlap}
+    
+noApproved <- 50; noDenied <- 50
+loanDf <- loanData(noApproved, noDenied, c(8, 120), c(10, 100), 
+                   c(1,20), c(2,30), -0.2, 0.6)
+
+# optimizing
+datafit <- lm(target ~ solvency + PIratio + 1, data=loanDf)
+summary(datafit)
+
+# compute misclassification
+predictedLabels <- ifelse(predict(datafit) < 0.5, "Approved", "Denied")
+
+# confusion matrices
+confMatrixFreq <- table(loanDf$deny, predictedLabels)
+confMatrixFreq
+confMatrixProp <- prop.table(confMatrixFreq, 1)
+confMatrixProp
+
+```
+
+
+### Sensitivity to outliers
+
+Once you are thinking in terms of decision boundary another shortcoming becomes apparent. Regression lines are very sensitive to points very far from it, in other words, they are very sensitive to outliers. Why is this property very bad for classification purposes? Intuitively, points that are very far from the boundary (on the correct side) should not matter much as they should be categorized with confidence. In fact, points that should influence the boundary the most are the points closest to it.
+
+This issue is due to the objective function that OLS uses to estimate the parameters - sum of squared errors. This is desirable property if we want to estimate the precise function that generates the data, but for categorization we can do better by relaxing that requirement - we have to know the function in as much as it leads to correct classification.
+
+We will come back to the notion of distance from the boundary later on when we will talk about support vector machines (SVM). When optimization problem is formulated differently, distance from the boundary can give a powerful boost in classification performance.
+
+
+```{r, discFnc_outlier}
+    
+# adding some outliers
+outlier <- data.frame(rep(12,10), c(400, 10), rep("Approved",10), rep(0,10))
+colnames(outlier) <- colnames(loanDf)
+loanDf <- rbind(loanDf, outlier)
+
+# optimizing
+datafit <- lm(target ~ solvency + PIratio + 1, data=loanDf)
+summary(datafit)
+
+# grabbing the coefficients
+weights <- coef(datafit)[c("solvency", "PIratio")]
+bias <- coef(datafit)[1]
+
+# the boundary
+x <- seq(min(loanDf["PIratio"]), max(loanDf["PIratio"]), 
+         length.out = noApproved+noDenied)
+y <- -(weights[2]/weights[1])*x + (0.5-bias)/weights[1]
+boundaryDf2 <- data.frame(PIratio=x, solvency=y, 
+                          deny=rep("New Boundary", length(x)))
+
+# plotting
+ggplot(data = loanDf, aes(x = solvency, y = PIratio, 
+       colour=deny, fill=deny)) + 
+geom_point() +
+xlab("solvency") +
+ylab("PI ratio") +
+theme_bw(base_size = 14, base_family = "Helvetica") + 
+geom_line(data=boundaryDf) + 
+geom_line(data=boundaryDf2) + 
+scale_color_manual("deny", 
+   values = c("New Boundary" = "black", "Boundary" = "grey", 
+              "Approved" = "blue", "Denied" = "red"))
+
+```
+
+
+
+
+### Multi-class classification
+
+How would you apply discriminant function to a problem with more than two categories (but finite)?
+
+A more general formulation is needed for $K$ categories problems. We have to implement 1-of-K or 1-vs-all coding scheme. We turn our problem into $K$ different binary classifications. To do this we create new "fake" target variables where one variables is set to 1 and all others are set to 0. We repeat this procedure for all $K$ categories and then train a separate discriminant function on each target variable:
+
+$$ y_k(\mathbf{x}) = \mathbf{w}_{k}^{T} \theta(\mathbf{x}) + w_{k0}. $$
+
+After having predicted probabilities for each target variable we assign input $x$ to category $C_k$ if $y_k(\mathbf{x})>y_j(\mathbf{x})$  for all $j\neq k$. 
+
+Decision boundary between categories $C_k$ and $C_j$ is then determined by $y_k(\mathbf{x}) = y_j(\mathbf{x})$.
+
+
+
+```{r, discFnc_gen}
+    
+noApproved <- 50; noDenied <- 50
+loanDf <- loanData(noApproved, noDenied, c(7, 150), c(10, 100), 
+                   c(2,20), c(2,30), -0.5, 0.3)
+
+# add target variable, coded in a particular way
+loanDf <- cbind(loanDf, 
+               target1 = c(rep(0, noApproved), rep(1, noDenied)),
+               target2 = c(rep(1, noApproved), rep(0, noDenied)) 
+               )
+
+# analytical solution
+X <- as.matrix(cbind(ind=rep(1, nrow(loanDf)), 
+               loanDf[,c("PIratio", "solvency")]))
+Y <- cbind(target1 = c(rep(0, noApproved), rep(1, noDenied)),
+           target2 = c(rep(1, noApproved), rep(0, noDenied)) 
+           )
+weightsOptim <- solve(t(X)%*%X) %*% t(X) %*% Y
+
+# compute predictions
+predictions <- X %*% weightsOptim
+head(predictions)
+
+# classify according to the argmax criterion
+denied <- (predictions==apply(predictions, 1, max))[,1]
+predictedLabels <- ifelse(denied, "Denied", "Approved")
+
+# classification algorithm performance
+confMatrixFreq <- table(loanDf$deny, predictedLabels)
+confMatrixFreq
+confMatrixProp <- prop.table(confMatrixFreq, 1)
+confMatrixProp
+
+```
+
+--------
+
+
+
+# References
+
+
+- For brief introduction on Decision theory and breaking down the classification problem into inference and decision stage, see section 1.5 in Bishop.  
+
+- For more details on discriminant functions, see Bishop sections 4.1.1 to 4.1.4. and Hastie, Tibshirani, Friedman, sections 2.3, 2.4, 4.1 and 4.2.  
+
+- For linear probability models, see for example Stock and Watson (2011): "Introduction to Econometrics".  
+
