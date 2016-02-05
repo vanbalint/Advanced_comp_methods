@@ -1,0 +1,602 @@
+---
+title: "Advanced computational methods - Lecture 4"
+author: "Hrvoje Stojic"
+date: "January 29, 2016"
+output:
+  html_document:
+    highlight: kate
+    theme: default
+    number_sections: yes
+  pdf_document:
+    fig_caption: no
+    highlight: kate
+    keep_tex: no
+    number_sections: yes
+    latex_engine: xelatex
+fontsize: 12pt
+documentclass: article
+sansfont: Roboto
+---
+
+
+```{r, knitr_options, cache=TRUE,  include=FALSE}
+    
+    # loading in required packages
+    if (!require("knitr")) install.packages("knitr"); library(knitr)
+    if (!require("rmarkdown")) install.packages("rmarkdown"); library(rmarkdown)
+
+    # some useful global defaults
+    opts_chunk$set(comment='##', warning=FALSE, message=FALSE, include=TRUE, echo=TRUE, cache=TRUE, cache.comments=FALSE)
+
+    # output specific defaults
+    output <- opts_knit$get("rmarkdown.pandoc.to")
+    if (output=="html") opts_chunk$set(fig.width=10, fig.height=5)
+    if (output=="latex") opts_chunk$set(fig.width=6,  fig.height=4, dev = 'cairo_pdf', dev.args=list(family="Helvetica"))
+
+```
+
+
+```{r, Setup_and_Loading_Data, include=FALSE}
+
+    # cleaning before starting, for interactive session
+    # rm(list=ls())
+    # setwd("/home/hrvoje/Cloud/Teaching/BGSE_DS_AdvComputing_2016/source/")
+    
+    # loading in required packages
+    if (!require("mvtnorm")) install.packages("mvtnorm")
+    if (!require("ggplot2")) install.packages("ggplot2")
+    if (!require("dplyr")) install.packages("dplyr")
+
+```
+
+
+
+# Outline
+
+
+This session introduces a basic nonparametric method for classification - k-nearest neighbor (kNN) classifier. In examining kNN classifiers we will also stress the need to fit our classifiers on one dataset while evaluating their performance on a completely separate dataset. This will also be a way to identify which parameters (how many neighbors? which distance measure?) are most suitable for our problems.
+
+
+
+---------------------------------------------
+
+
+
+# Parametric vs. Nonparametric models
+
+In supervised learning everything we are doing mathematically boils down to modeling $P(y|X)$, hoping that there is some relationship between the quantities we are interested in. There are many differences between the models, but one of the crucial distinctions is between parametric and non-parametric models.
+
+Simplistically, **parametric models** have fixed number of parameters, while in **non-parametric models** number of parameters increases with number of training points. Parametric models are easier to train due to this, but they make strong assumptions on the nature of the distribution. Nonparametric models let the data speak for itself, making very few assumptions and estimating the "nature" of the distribution empirically.
+
+With rise of computing power and amount of data, non-parametric models became more popular. However, the main problem of non-parametric models is difficult to resolve - [curse of dimensionality](https://en.wikipedia.org/wiki/Curse_of_dimensionality) (see Hastie textbook, p22). With increase of dimensionality, number of points you have for estimating the distribution decreases very rapidly - the data becomes too sparse to estimate the distribution reliably. Increase in the data size cannot compensate for it.
+
+We use parametric models, such as linear regression as a way to combat the curse of dimensionality. We make certain assumptions on how the data is distributed $P(y|X)$ to reduce the parameter space that we are estimating. For example, assuming Gaussian distribution requires estimating only two parameters. However, there is no free lunch, if your assumption of the nature of the distribution is not correct, you will not produce good predictions.
+
+
+---------------------------------------------
+
+
+
+# Basic non-parametric model - k Nearest Neighbors (kNN)
+
+This is probably the simplest possible non-parametric classifier - it looks into the neighborhood of the point in the training set and counts how many members there are of each class and simply predicts the label of the point according to the majority vote. Even though it is a very simple model, it can give very good results.
+
+More formally, kNN classifier uses $k$ observations "closest" in input space to point $x$ to form a prediction for its class. What is close is defined with a metric (recall the definition from the theory lectures), for now we will stick to all-familiar Euclidean distance. We define kNN fit as follows: 
+
+$$\hat{Y}(x) = \frac{1}{k} \Sigma_{x_i \in N_k(x)} y_i,$$ 
+
+where $N_k(x)$ is the neighborhood around of $x$ defined by $k$ closest points. If classes are binary coded $\hat{Y}$ is a proportion of class 1 points in the neighborhood. We classify the point $x$ according to the majority vote: 1 if $\hat{Y}>0.5$ and $0$ if $\hat{Y}<0.5$.
+
+
+---------------------------------------------
+
+
+
+## Dataset with nonlinear decision boundaries
+
+We will first generate a new type of artificial dataset - we will generate the observations from a **mixture of Gaussians**. Discriminant functions that we have seen in the first seminar session are unlikely to perform well on this type of distributions, as optimal decision boundary is nonlinear. However, kNN has no problems with such dataset whatsoever.
+
+
+```{r, dataset_mixtureGaussian, dev = 'cairo_pdf', dev.args=list(family="Helvetica")}
+
+# 2 class 2 dimensional mixture of Gaussians
+genGaussMix <- function(noObs = c(100, 100), 
+                        noGaussians = 10, 
+                        mixtureProb = rep(1/noGaussians, noGaussians), 
+                        seed = 2222) {
+    
+    set.seed(seed)
+
+    # producing means of our bivariate Gaussians
+    meansC1 <- rmvnorm(noGaussians, mean = c(1,0), sigma = diag(2))
+    meansC2 <- rmvnorm(noGaussians, mean = c(0,1), sigma = diag(2))
+
+    # for each observation we first randomly select one Gaussian and then 
+    # generate a point according to the parameters of that Gaussian
+    whichGaussianC1 <- sample(nrow(meansC1), noObs[1], 
+                              mixtureProb, replace = TRUE)
+    whichGaussianC2 <- sample(nrow(meansC2), noObs[2], 
+                              mixtureProb, replace = TRUE)
+
+    # now drawing samples from selected bivariate Gaussians
+    drawsC1 <- whichGaussianC1 %>% 
+        sapply(function(x) rmvnorm(1, mean = meansC1[x,], 
+               sigma = diag(2)/5)) %>% t()
+    drawsC2 <- whichGaussianC2 %>% 
+        sapply(function(x) rmvnorm(1, mean = meansC2[x,], 
+               sigma = diag(2)/5)) %>% t()
+
+    # combining and labeling
+    dataset <- data.frame(rbind(drawsC1, drawsC2), 
+                          label = c(rep("C1", noObs[1]), rep("C2", noObs[2])), 
+                          y = c(rep(0, noObs[1]), rep(1, noObs[2])),
+                          stringsAsFactors = FALSE)
+    return(dataset)
+}
+
+
+# plotting function
+plot2dClasses <- function(dataset) {
+    ggplot(data = dataset, 
+           aes(x = X1, y = X2, colour = factor(y))) + 
+    geom_point(size = 2, shape = 4) +
+    xlab("X1") +
+    ylab("X2") +
+    theme_bw() + 
+    theme(text=element_text(family="Helvetica")) +
+    scale_color_manual("Class", 
+        values = c("0" = "blue", "1" = "red"))
+}
+
+# generate some data
+dataset <- genGaussMix()
+str(dataset)
+plot2dClasses(dataset)
+
+```
+
+
+---------------------------------------------
+
+
+
+## Poorman's implementation of kNN
+
+Steps for implementing the kNN classifier:  
+
+0. Define parameters $k$ and $p$  
+1. Compute the distance between each point and all others, defined by parameter $p$  
+2. Sort the distances in ascending order and pick the first $k$ elements  
+3. Lookup classes of those $k$ elements  
+4. Assuming classes are coded as 0's and 1's, compute the mean  
+5. Classify as 1 if the mean > 0.5, and as 0 otherwise  
+
+
+As a simplification we will consider only odd $k$, so we do not have to break ties.
+
+
+```{r, simple_kNN}
+
+# specify parameters
+k <- 1  # odd number
+p <- 2  # Manhattan (1), Euclidean (2) or Chebyshev (Inf)
+
+# Compute the distance between each point and all others 
+# according to the similarity measure
+noObs <- nrow(dataset)
+distMatrix <- matrix(NA, noObs, noObs)
+features <- as.matrix(dataset[ ,1:2])
+for (obs in 1:noObs) {
+    
+    # getting the probe for the current observation
+    probe <- features[obs,]
+    probeExpanded <- matrix(probe, nrow = noObs, ncol = 2, byrow = TRUE)
+
+    # computing distances between the probe and exemplars in the memory
+    if (p %in% c(1,2)) {
+        distMatrix[obs, ] <- ( rowSums((abs(features - 
+                              probeExpanded))^p) )^(1/p)
+    } else if (p==Inf) {
+        distMatrix[obs, ] <- apply(abs(features - probeExpanded), 1, max)
+    }  
+}
+
+# check that we have 0's on the diagonal
+# each point is closest to itself
+all(diag(distMatrix) == 0)
+
+# Finding the neighbors!
+# Sort the distances for each point in increasing numerical order 
+neighbors <- apply(distMatrix, 2, order) %>% t()
+
+# first entry for the first point should be the closest neighbor
+neighbors[1,1] == 1
+
+
+# the most frequent class in the k nearest neighbors
+prob <- rep(NA, noObs)
+for (obs in 1:noObs) {
+    prob[obs] <- mean(dataset[neighbors[obs, 1:k], "y"])
+}
+
+# predicted label
+predictedClasses <- ifelse(prob > 0.5, 1, 0)
+
+# examine accuracy
+table(predictedClasses, dataset[,"y"])
+mean(predictedClasses == dataset[,"y"])
+
+```
+
+A perfect accuracy! 
+
+Recall from theory classes that the error rate of the 1-NN classifier is at most 2 times larger than the Bayes risk. Think about the following question: Does that mean that we can have a rough estimate of the Bayes risk based on our 1-NN?
+
+The theorem at hand works asymptotically, so in bias-variance terms bias of the 1-NN classifier in realistic cases will not be zero. In fact it might be substantial, hence 1-NN error might be a poor estimate of the Bayes risk.
+
+1NN will always achieve perfect accuracy on the training set - it simply replicates the label of each point. $k$ parameter acts as a hyper parameter, similar to regularization parameter. You cannot optimize it on training data - 1NN will always winn the day. We need test data to really evaluate the effect of $k$.
+
+On a sidenote, 1NN induces [Voronoi tessellation](https://en.wikipedia.org/wiki/Voronoi_diagram) of the points - it has quite a few applications!
+
+
+---------------------------------------------
+
+
+
+## Optimizing k parameter
+
+To choose $k$ and $p$ parameters, we need to evaluate kNN classifiers with different combinations of parameters on a new dataset which is completely separate from the training set. In this section we cycle through various values of the $k$ parameter and compute the miss-classification error on both training and test set. We will see that these two can differ a lot, and choosing $k$ on the basis of performance in the training set is likely to result in an overall suboptimal performance of the classifier. Of course, this is due to overfitting and we will discuss this issue at greater length in future sessions.
+
+Before trying kNN on some test data let us wrap the code above in a function.
+
+```{r, kNN_function}
+
+kNN <- function(X, y, memory = NULL, 
+                k = 1, p = 2, type="train") {
+    
+    # test the inputs
+    library(assertthat)
+    not_empty(X); not_empty(y); 
+    if (type == "train") {
+        assert_that(nrow(X) == length(y))
+    }
+    is.string(type); assert_that(type %in% c("train", "predict"))
+    is.count(k); 
+    assert_that(p %in% c(1, 2, Inf))
+    if (type == "predict") {
+        assert_that(not_empty(memory) & 
+                    ncol(memory) == ncol(X) & 
+                    nrow(memory) == length(y))
+    }
+
+    # Compute the distance between each point and all others 
+    noObs <- nrow(X)
+    
+    # if we are making predictions on the test set based on the memory, 
+    # we compute distances between each test observation and observations
+    # in our memory
+    if (type == "train") {
+        distMatrix <- matrix(NA, noObs, noObs)
+        for (obs in 1:noObs) {
+            
+            # getting the probe for the current observation
+            probe <- as.numeric(X[obs,])
+            probeExpanded <- matrix(probe, nrow = noObs, ncol = 2, 
+                                    byrow = TRUE)
+
+            # computing distances between the probe and exemplars in the
+            # training X
+            if (p %in% c(1,2)) {
+                distMatrix[obs, ] <- (rowSums((abs(X - 
+                                      probeExpanded))^p) )^(1/p)
+            } else if (p==Inf) {
+                distMatrix[obs, ] <- apply(abs(X - probeExpanded), 1, max)
+            }  
+        }
+    } else if (type == "predict") {
+        noMemory <- nrow(memory)
+        distMatrix <- matrix(NA, noObs, noMemory)
+        for (obs in 1:noObs) {
+           
+            # getting the probe for the current observation
+            probe <- as.numeric(X[obs,])
+            probeExpanded <- matrix(probe, nrow = noMemory, ncol = 2, 
+                                    byrow = TRUE)
+
+            # computing distances between the probe and exemplars in the memory
+            if (p %in% c(1,2)) {
+                distMatrix[obs, ] <- (rowSums((abs(memory - 
+                                      probeExpanded))^p) )^(1/p)
+            } else if (p==Inf) {
+                distMatrix[obs, ] <- apply(abs(memory - probeExpanded), 1, max)
+            }  
+        }
+    }
+    
+    # Sort the distances in increasing numerical order and pick the first 
+    # k elements
+    neighbors <- apply(distMatrix, 1, order) 
+
+    # Compute and return the most frequent class in the k nearest neighbors
+    prob <- rep(NA, noObs)
+    for (obs in 1:noObs) {
+        prob[obs] <- mean(y[neighbors[1:k, obs]])
+    }
+
+    # predicted label
+    predictedClasses <- ifelse(prob > 0.5, 1, 0)
+
+    # examine the performance, available only if training
+    if (type == "train") {
+        errorCount <- table(predictedClasses, y)
+        accuracy <- mean(predictedClasses == y)
+    } else if (type == "predict") {
+        errorCount <- NA
+        accuracy <- NA
+    }
+
+    # return the results
+    return(list(predictedClasses = predictedClasses, 
+                prob = prob,
+                accuracy = accuracy,
+                errorCount = errorCount))
+}
+
+```
+
+Note the use of assertions at the beginning of the kNN function. Verifying that the inputs are in expected format is a good programming practice. It helps us in figuring out why an error occurred and ensures that the results will come out as expected. This is useful even if it is only you that are using the functions, while it is crucial if you want to disseminate the functions publicly, say as an R package. In writing assertions, `assertthat` package is very useful wrapper of R's very basic `stopifnot()` (Hadley Wickham again!).
+
+
+```{r, testData, dev = 'cairo_pdf', dev.args=list(family="Helvetica")}
+
+# new test set
+datasetTest <- genGaussMix(noObs=c(200, 200), seed=1234)
+
+# specify parameters
+k <- 1  # odd number
+p <- 2  # Manhattan (1), Euclidean (2) or Chebyshev (Inf)
+
+# training 
+trainResults <- kNN(X = dataset[,1:2], y = dataset[,4], 
+                    k = k, p = p, type = "train")
+head(trainResults$predictedClasses)
+head(trainResults$prob)
+
+# accuracy
+trainResults$errorCount
+trainResults$accuracy
+
+# test
+testResults <- kNN(X = datasetTest[,1:2], y = dataset[,4], 
+                   memory = dataset[,1:2], 
+                   k = k, p = p, type = "predict")
+
+head(testResults$predictedClasses)
+head(testResults$prob)
+
+# accuracy
+mean(testResults$predictedClasses == datasetTest[,4])
+
+
+# ----
+# choosing k
+# ----
+
+# we examine the classifier performance on the test set for many k's
+k <- c(1,3,5,7,9,11,15,17,23,25,35,45,55,83,101,151 ); 
+p <- 2
+
+
+errorTrain <- errorTest <- rep(NA, length(k))
+for (iter in 1:length(k)) {
+    # get the training error
+    errorTrain[iter] <- 1 - kNN(X = dataset[,1:2], 
+                                y = dataset[,4], 
+                                k = k[iter], p = p, 
+                                type = "train")$accuracy
+    # get the test error
+    predictedClasses <- kNN( X = datasetTest[,1:2], 
+                             y = dataset[,4],
+                             memory = dataset[,1:2], 
+                             k = k[iter], p = p, 
+                             type = "predict")$predictedClasses
+    errorTest[iter] <- mean(predictedClasses!=datasetTest[,4])
+}
+
+
+# reshaping the data a bit
+plottingData <- 
+    data.frame(k, Train=errorTrain, Test=errorTest) %>%
+    reshape2::melt(id="k", 
+                   variable.name = "Sample", 
+                   value.name = "Error")
+
+# plotting the generalization error for those k's
+ggplot(data = plottingData, 
+       aes(x = factor(k), y = Error, colour=Sample, group=Sample)) + 
+geom_line() + 
+geom_point() +
+xlab("k -Number of nearest neighbors") +
+ylab("Misclassification error") +
+theme_bw(base_size = 14, base_family = "Helvetica") + 
+scale_color_manual("Sample", 
+    values = c("Train" = "blue", "Test" = "red"))
+
+```
+
+
+### Computational considerations
+
+Above we crated an kNN function that works reasonably well on smaller datasets, however with large high-dimensional datasets it will be slow. The code can be improved significantly and one of the exercises is to think of ways of making the code more efficient. What are the ways to improve the efficiency? Here are few ideas without helping you too much in your exercises:  
+
+1. If you are optimizing the parameters, most likely you will try large number of $k$ values. In this case you would not want to use the kNN function the way we specified it above. In every run you would be computing distances between each point and all others, but you would be discarding most of the computed information in a single run. Once the distances are computed you can use them to compute predictions for any possible $k$!
+
+2. You could improve lookup time. Indexing with [] operator is slow, there are better methods, such as hash tables. Unfortunately, R does not have hash table object like Python has (1:0 for Python), at least not directly. Environments in R actually use hash tables, so you could populate a new environment with your key:value pairs, even though environments are not really meant to be used in that way. Check `?new.env` and `hash` package.
+
+In cases when the number of instances is much larger than the number of features, there are more advnaced techniques that can speed up finding the neighbors - look for R-tree or a kd-tree methods for storing instances.
+
+
+---------------------------------------------
+
+
+
+### kNN in R packages
+
+There are packages that have kNN functions, for instance `class` package has a good kNN function. However, before switching to potentially more efficient things programmed by other people, I would advise you to first build your own functions to understand the method thoroughly. Also, be aware that packages as a rule come with **absolutely no guarantee**.
+
+
+```{r, class_package}
+
+if (!require("class")) install.packages("class")
+# ?knn
+
+# datasets
+train <- dataset[ ,1:2]
+test <- datasetTest[ ,1:2]
+cl <-  dataset[ ,3]
+
+# 1-NN
+predictedClasses <- knn1(train, test, cl)
+head(predictedClasses)
+table(predictedClasses, datasetTest[,3])
+mean(predictedClasses == datasetTest[,3])
+
+# kNN
+predictedClasses <- knn(train, test, cl, k = 15, prob = TRUE)
+head(predictedClasses)
+head(attr(predictedClasses, "prob"))
+table(predictedClasses, datasetTest[,3])
+mean(predictedClasses == datasetTest[,3])
+
+# cross-validated kNN
+predictedClasses <- knn.cv(train, cl, k = 3, prob = TRUE)
+mean(predictedClasses == dataset[,3])
+
+```
+
+Other packages that have kNN functions: [kknn](http://cran.r-project.org/web/packages/kknn/) and [RWeka](http://cran.r-project.org/web/packages/RWeka/).
+
+
+---------------------------------------------
+
+
+
+## Permuting inputs
+
+Let us check out the famous [MNIST](http://yann.lecun.com/exdb/mnist/) dataset - recognition of handwritten digits, a classical image recognition task. You will work with it in this homework. More specifically, we will use a dataset that is a bit easier to work with than the original MNIST - dimensionality is reduced to 16x16 pixels and digits are centered.
+
+
+```{r, MNIST, fig.width=3,  fig.height=3}
+# loading the training data
+trainData <- read.csv("../datasets/MNIST/MNIST_training.csv")
+
+# check the data
+dim(trainData)
+
+# load in the function for showing digit images
+source("../datasets/MNIST/displayDigit.R")
+
+# illustrating a digit
+# 1. label on first spot
+label <- trainData[1, 1]
+
+# 2. the rest are pixel intensities for 16x16 image of digits
+features <- as.numeric(trainData[1, 2:257])
+
+# displaying the digit
+displayDigit(features, label, newDevice = FALSE)
+
+# run the following line if you want to examine couple of digits
+# press ENTER to display the next digit, or "b" and ENTER to break the sequence
+# displayDigitSeq(trainData[, 2:257], trainData[, 1])
+
+```
+
+We will now check how kNN fares on this dataset. On Yann Le Cun's webpage you can check the records so far on this dataset (the link above) - kNN does fairly well, especially with certain modifications.
+
+Then we will randomly permute the columns of the dataset and train kNN again. What do you expect to happen? How will permuting columns affect the prediction accuracy?  
+
+```{r, permutedData, fig.width=3,  fig.height=3}
+
+# lets check how good kNN is on this dataset
+# we'll use the function from class package
+features <- trainData[1:1000,2:257]
+labels <- trainData[1:1000,1]
+
+predictedLabels <- knn( train = features, 
+                        test = features, 
+                        cl = labels, 
+                        k = 5, 
+                        prob = TRUE )
+
+# check the results
+head(predictedLabels, 10)
+head(attr(predictedLabels, "prob"), 10)
+
+# confusion matrix
+table(predictedLabels, labels)
+mean(predictedLabels == labels)
+
+# displayDigitSeq(features, labels, predictedLabels)
+
+
+# ---- 
+# now we permute the columns 
+# ----
+
+set.seed(1111)
+featuresPermuted <- features[, sample(ncol(features))]
+
+# illustrate the permuted digit
+displayDigit(as.numeric(features[1,]), label[1], newDevice = FALSE)
+displayDigit(as.numeric(featuresPermuted[1,]), label[1], newDevice = FALSE)
+
+# and re-train the kNN
+predictedLabels <- knn( train = featuresPermuted, 
+                        test = featuresPermuted, 
+                        cl = labels, 
+                        k = 5, 
+                        prob = TRUE )
+
+# check the results
+head(predictedLabels, 10)
+head(attr(predictedLabels, "prob"), 10)
+
+# confusion matrix
+table(predictedLabels, labels)
+mean(predictedLabels == labels)
+
+# displayDigitSeq(featuresPermuted, labels, predictedLabels)
+
+```
+
+Why is the accuracy not affected at all? Why is spatial configuration irrelevant?
+
+Our visual system has evolved to recognize such "natural" structures in the visual input. Here we have an input consisting of 256 dimensions and our visual system successfully identified the important manifold that exists in 2 dimensions. Most classification algorithms cannot directly extract such spatial structure, including kNN. This can be considered both a blessing and a curse - models are general enough not to have to rely on us for recognizing the structure in the input, but they can ignore a very useful source of information that is obvious to human eye. 
+
+One model, based on kNN, can exploit such manifolds - [Isomap](http://isomap.stanford.edu/) discussed in the theory classes. For more details, see an article by Tenenbaum, de Silva and Langford (2000) which introduced the method. As a side-note, Tenenebaum is actually quite famous cognitive scientist, but also an expert on multi-dimensional scaling (MDS) methods, which is very related to manifold learning (MDS methods were originally developed in psychology by Shepard to deal with the problem of describing psychological distances).
+
+
+---------------------------------------------
+
+
+
+## Remarks
+
+Attractive feature of the kNN classifiers is that they make no assumption on the underlying distribution - we do not assume a particular form of the distribution $P(y|X)$. They are rather simple to implement and there is only a few parameters to tune. It is similar to histogram and kernel methods which instead of fixing number of closest points fix the volume and divide the input space on buckets of equal volume. kNN bad side is that curse of dimensionality hits them fast which makes them less suitable for high dimensional data. kNN classifier is also a **black box** prediction model, we will have no insight in why it is achieving a prediction accuracy that it achieves. This of course might not be relevant issue if we are interested solely in predicting.
+
+kNN is a **memory-based learning** or **instance-based learning** model. It stores all the observations in a memory and storage requirements are quite big in comparison to models that after the optimization can discard the data completely if needed.  
+
+kNN is also **lazy learning** method since it accumulates experience and does the real work only when really needed - when it has to make predictions. This implies a **trade-off between training and testing** that is important to keep in mind when considering to employ kNN. It is relatively cheap to train kNN, you simply record a new instance and you do not re-estimate your model after each update, however it is very expensive to predict since this is when computations start with kNN. For example, kNN does extremely well on the handwritten digits dataset that you will use in the coding exercises, however originally the purpose of the US post was to make A LOT of predictions with the classifier on daily basis, and for such purposes kNN is simply too slow in comparison with other classifiers.
+
+
+---------------------------------------------
+
+
+
+# Useful references
+
+- Bishop (2007): section 2.5.   
+- Murphy. section 1.4.2
+- Hastie, Tibshirani, Friedman (2013): sections 2.3.2 and 2.3.3, 2.5, 2.9, 13.3 and 13.5.  
+- Digits dataset is a subset of a famous [MNIST](http://yann.lecun.com/exdb/mnist/) database of handwritten digits.

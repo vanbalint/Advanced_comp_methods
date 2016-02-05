@@ -1,0 +1,8 @@
+base
+knitr
+rmarkdown
+mvtnorm
+ggplot2
+dplyr
+assertthat
+class
