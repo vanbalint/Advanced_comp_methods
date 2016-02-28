@@ -1,0 +1,911 @@
+---
+title: "Advanced computational methods - Lecture 6"
+author: "Hrvoje Stojic"
+date: "February 11, 2016"
+header-includes:
+    - \usepackage{dsfont}
+output:
+  html_document:
+    highlight: kate
+    theme: default
+    number_sections: yes
+  pdf_document:
+    fig_caption: no
+    highlight: kate
+    keep_tex: no
+    number_sections: yes
+    latex_engine: xelatex
+fontsize: 12pt
+documentclass: article
+sansfont: Roboto
+---
+
+
+```{r, knitr_options, cache=TRUE,  include=FALSE}
+    
+    # loading in required packages
+    if (!require("knitr")) install.packages("knitr"); library(knitr)
+    if (!require("rmarkdown")) install.packages("rmarkdown"); library(rmarkdown)
+
+    # some useful global defaults
+    opts_chunk$set(comment='##', warning=FALSE, message=FALSE, include=TRUE, echo=TRUE, cache=TRUE, cache.comments=FALSE)
+
+    # output specific defaults
+    output <- opts_knit$get("rmarkdown.pandoc.to")
+    if (output=="html") opts_chunk$set(fig.width=10, fig.height=5)
+    if (output=="latex") opts_chunk$set(fig.width=6,  fig.height=4, dev = 'cairo_pdf', dev.args=list(family="Arial"))
+
+```
+
+
+```{r, Setup_and_Loading_Data, include=FALSE}
+
+    # cleaning before starting, for interactive session
+    # rm(list=ls())
+    # setwd("/home/hrvoje/Cloud/Teaching/BGSE_DS_AdvComputing_2016/source/")
+
+```
+
+
+
+# Outline
+
+In this session we will discuss various methods that we can use for estimating the generalization error and we will focus on cross-validation. We will also introduce another simple, yet powerful classifier - classification trees. We will use a simplified version of the classification tree to have a cleaner understanding of the procedure. In terms of optimizing parameters, it is similar to the nearest neighbors classifier - it can describe the data perfectly and fitting them to the training data is a bad idea.
+
+
+
+# Estimating generalization error
+
+All models trade-off bias against the variance. The more complex the models get the lower their bias, i.e. the error in the training sample diminishes. But this comes at the cost of generalizing to new data. Since our goal is at the end to be able to deal with new data, in general we want to estimate how accurate the model will be on such new data.
+
+Hence, the solution is to do the **model assesment** on test data that the classifiers have not seen during the training. The problem gets more complicated if we have more than one classifier. We usually do, which means we first have to do **model selection**. We need another portion of data - validation dataset - for this purpose as by examining many models on the same validation dataset we can overfit it and cannot use it anymore to estimate the final test error. 
+
+The method just described requires one to have a lot of data. Here we discuss methods that save some data by approximating the validation step. There are two main approaches to estimating generalization error of the validation step: 1) by using the training error and correcting it for its optimism, and 2) by estimating the generalization error more directly through efficeint samling and reuse of the data. 
+
+In first group we have methods like Akaike (AIC) and Bayesian information criterion (BIC), Minimum description length (MDL) and Structural risk minimization (SRM). In the second group we have cross-validation and bootstrap methods.
+
+Chapter 7 in Hastie et al (2013) textbook is a very good overview of all these methods.
+
+
+## 1. Training error + optimism correction
+
+Training error is optimistic due to models adapting themselves to the data which is a single realization of random variables. If we could define the extent of the optimism we might still use the training error. These corrections consist of adding an estimated model complexity term to the training error. AIC and BIC are very similar methods, where model complexity is approximated by number of parameters in the model. They both tend to favor simpler models for smaller samples, with BIC penalizing complex models more heavily than AIC. Although they have very similar form, motivation is quite different - BIC is grounded in Bayesian models selection and will select the correct model as N goes to infinity (if it is among the tested ones), while AIC does not have such guarantees. These approximations work well for certain types of models (linear ones in particular). 
+
+For a brief overview of Bayesian perspective, see Bishop section 3.4. Dealing with overfitting comes naturally in Bayesian framework and as a bonus - model averaging works out of the box.
+
+Another approach to estimating complexity is MDL and SRM. MDL is based on Kolmogorov's concept of algorithmic complexity (not computable) and information theory.^[The idea is actually related to file compression like ZIP or TAR - how much can you compress the description of the algorithm?] SRM is based on Vapnik-Chervonenkis (VC) theory that is better equipped for estimating the complexity of a class of models. AIC and BIC rely on very crude approximations through number of parameters, however for many classes with adaptive parameters that is a poor estimate of complexity. Although theoretically sound, VC theory and SRM are rather difficult to apply empirically. 
+
+
+## 2. Estimating the generalization error directly  
+
+The simplest and most widely used method is cross-validation (CV). We will focus on these methods here. It consists of taking a subset of size $k$ out of the sample of size $N$, training the classifier on $N-k$ observations and predicting the labels on the held out sample of $k$ observations. Ideal implementation would involve doing this procedure exhaustively, for all $(N over k)$ possible ways to partition the data. This is, of course, usually infeasible. There are several less-then-ideal implementations:  
+1. Leave-one-out method (not recommended)  
+2. k-fold CV (recommended)  
+3. Monte Carlo CV (also quite expensive to implement usually)
+
+Below I illustrate these methods in more details. Another method is bootstrapping and I will discuss this method in the context of bagging and random forests.
+
+
+## Illustration
+
+We will use kNN to illustrate several of the methods discussed above. Before that, let us generate some interesting data where we know the data generating process. We use examples from Hastie, Tibishrani and Friedman (2013, pg. 468) where Bayes risk is 0, but kNN will still have problems with finding the patterns due to noise in the distance matrix. 
+
+
+```{r}
+
+# easy and difficult problem with bayes risk = 0
+# from Hastie et al 2013, pg 468
+genEasy <- function(noObs = 100) {
+    noFeatures <- 10
+    X <- matrix(runif(noObs*noFeatures), ncol = noFeatures)
+    y <- ifelse(X[,1] > 0.5, 1, 0)
+    return(list(X=X, y=y))
+}
+
+genDifficult <- function(noObs = 100) {
+    noFeatures <- 10
+    X <- matrix(runif(noObs*noFeatures), ncol = noFeatures)
+    y <- ifelse(sign((X[,1]-0.5)*(X[,2]-0.5)*(X[,3]-0.5)) > 0, 1, 0)
+    return(list(X=X, y=y))
+}
+
+# Import packages and functions
+if (!require("doMC")) install.packages("doMC")
+if (!require("class")) install.packages("class")
+if (!require("dplyr")) install.packages("dplyr")
+if (!require("ggplot2")) install.packages("ggplot2")
+
+
+# generate training and test samples
+trainEasy <- genEasy(100) 
+testEasy <- genEasy(1000)
+
+trainDiff <- genDifficult(100) 
+testDiff <- genDifficult(1000)
+
+# define the vector of k parameters to optimize using different 
+# types of estimations of test errors.
+ks <- c(1:60)
+
+```
+
+
+### Training error a.k.a resubstitution error
+
+We need it as a baseline. As mentioned, it is a poor estimate of a generalization error that we are interested in. Since we will use kNN to illustrate it, for a method with huge variance and small bias, we will get a result where for $k=1$ there is no error, because the nearest neighbor is the observation itself. 
+
+
+```{r}
+
+# -----
+# Resubstitution
+# -----
+
+# resubstitution function
+getResubError <- function(features, labels, k) {
+    pred <- knn(train = features, test = features, cl = labels, k = k)
+    return(c(k = k, error = mean(pred != labels)))
+}
+
+# preparing the parallelization
+registerDoMC(detectCores())
+
+resubError <- foreach(k = ks, 
+                      .combine = rbind, 
+                      .packages = c("class", "dplyr")) %dopar% {
+                      
+    # some helpful debugging messages
+    #cat("The current test set! k=", k, "\n")
+      
+    # kNN results
+    resEasy <- getResubError(trainEasy$X, trainEasy$y, k)
+    resDiff <- getResubError(trainDiff$X, trainDiff$y, k)
+
+    # final output
+    data.frame(c("Resub", "Resub"), c("Easy", "Difficult"), 
+               rbind(resEasy, resDiff))
+}
+
+# prettyfying
+colnames(resubError) <- c("cvType", "exp", "k", "Error")
+resubError <- cbind(resubError, SE=NA)
+
+```
+
+
+### Leave-one-out validation
+
+This validation method consists of training the classifier on $N-1$ data points and testing on the remaining $N^{th}$ point, where $N$ is number of observations in the dataset. This procedure is repeated as many times as there are observations, and estimated test error is the mean across all $N$ errors. Of course, this has to be repeated for each combination of hyper-parameters you are optimizing. Although it is widely used in practice, it is not a recommended cross validation method. Since the error is based on single point, its variance is relatively high and final estimates are unstable. k-fold method is more reliable.
+
+
+```{r}
+# -----
+# Leave-one-out
+# -----
+
+# function for creating indicator variable for subsetting the data
+# applicable for any kinf of kfold cross-validation
+genCVid <- function(noObs = 100, K = 10, seed = round(runif(1)*10000, 0)) {
+    stopifnot(noObs >= K); set.seed(seed)
+    CVindex <- rep(1:K, times = ceiling(noObs / K))[1:noObs]
+    CVindexRand <- sample(CVindex, noObs)
+}
+
+getKfoldError <- function(features, labels, k, bucket) {
+  
+    pred <- knn(train = features[cvID!=bucket,], 
+                test = features[cvID==bucket,], 
+                cl = labels[cvID!=bucket], 
+                k = k)
+    error <- mean(pred != labels[cvID==bucket])
+    return(c(k = k, bucket = bucket, error = error))
+}
+
+# we simply set number of subsets/buckets to number of observations
+noBuckets <- nrow(trainEasy$X)
+cvID <- genCVid(noBuckets, noBuckets, 1111)
+
+# run LOO
+looError <- foreach(bucket = rep(1:noBuckets, length(ks)), 
+                    k = rep(ks, each=noBuckets), 
+                    .combine = rbind, 
+                    .packages = c("class", "dplyr")) %dopar% {
+                      
+    # some helpful debugging messages
+    #cat("Bucket", bucket, "is the current test set! k=", k, "\n")
+    
+    # kNN results
+    resEasy <- getKfoldError(trainEasy$X, trainEasy$y, k, bucket)
+    resDiff <- getKfoldError(trainDiff$X, trainDiff$y, k, bucket)
+
+    # final output
+    data.frame(c("Loo", "Loo"), c("Easy", "Difficult"), 
+               rbind(resEasy, resDiff))
+}
+
+# get the LOO error
+colnames(looError) <- c("cvType", "exp", "k", "bucket", "error")
+looError <- as.data.frame(looError) %>% 
+    group_by(cvType, exp, k) %>% 
+    summarize(Error = mean(error),
+              SE = sd(error)/mean(n()))
+
+```
+
+
+### k-fold cross validation
+
+This method consists of dividing the dataset into $K$ almost equal subsets of data (aka folds). Then we train the classifier on $K-1$ subsets, and make predictions on the remaining $K^{th}$ subset. Final estimate of the test error is an aveage over all $K$ test errors. Leave-one-out method is a special case of k-fold when $K=N$. 
+
+```{r}
+
+# -----
+# k-fold 
+# -----
+
+# we simply set number of subsets/buckets to 10
+# and use the same function to generate the indicators for subsetting
+noBuckets <- 10
+cvID <- genCVid(nrow(trainEasy$X), noBuckets, 1111)
+
+# run kfold
+kfoldError <- foreach(bucket = rep(1:noBuckets, length(ks)), 
+                      k = rep(ks, each=noBuckets), 
+                      .combine = rbind, 
+                      .packages = c("class", "dplyr")) %dopar% {
+                      
+    # some helpful debugging messages
+    #cat("Bucket", bucket, "is the current test set! k=", k, "\n")
+    
+    # kNN results
+    resEasy <- getKfoldError(trainEasy$X, trainEasy$y, k, bucket)
+    resDiff <- getKfoldError(trainDiff$X, trainDiff$y, k, bucket)
+
+    # final output
+    data.frame(c("10fold", "10fold"), c("Easy", "Difficult"), 
+               rbind(resEasy, resDiff))
+}
+
+# get the kfold error
+colnames(kfoldError) <- c("cvType", "exp", "k", "bucket", "error")
+kfoldError <- kfoldError %>% 
+    group_by(cvType, exp, k) %>% 
+    summarize(Error = mean(error),
+              SE = sd(error)/mean(n()))
+
+```
+
+
+### Monte Carlo 
+
+This validation method consists on randomly choosing a set of $l$ observations, train the classifier using the remaining $N - l$ observations, and compute the misclassification errors using the subset with $l$ observations as a test set. It's recommended to set $l=N/10$ and to repeat it $N$ times (number of observations). Final estimated test error is a mean across these $N$ test errors.
+
+
+```{r}
+
+# ----
+# Monte Carlo 
+# ----
+
+noMC <- nrow(trainEasy$X)
+noBuckets <- noMC/10
+
+# run kfold
+mcError <- foreach(bucket = rep(1:noBuckets, length(ks)*noMC/10), 
+                   k = rep(ks, each=noMC), 
+                   .combine = rbind, 
+                   .packages = c("class", "dplyr")) %dopar% {
+                      
+    # some helpful debugging messages
+    #cat("Bucket", bucket, "is the current test set! k=", k, "\n")
+    
+    # randomly subsetting in each iteration
+    cvID <- genCVid(nrow(trainEasy$X), noBuckets)
+
+    # kNN results
+    resEasy <- getKfoldError(trainEasy$X, trainEasy$y, k, bucket)
+    resDiff <- getKfoldError(trainDiff$X, trainDiff$y, k, bucket)
+
+    # final output
+    data.frame(c("MC", "MC"), c("Easy", "Difficult"), 
+               rbind(resEasy, resDiff))
+}
+
+# get the MC error
+colnames(mcError) <- c("cvType", "exp", "k", "bucket", "error")
+mcError <- mcError %>% 
+    group_by(cvType, exp, k) %>% 
+    summarize(Error = mean(error),
+              SE = sd(error)/mean(n()))
+
+```
+
+
+### Bayesian information criterion
+
+Formula is slightly adapted for the kNN that we use here. kNN does not have traditional number of parameters, instead we approximate it with $N/k$.
+
+
+```{r}
+
+# -----
+# BIC
+# -----
+
+# resubstitution function
+getBIC <- function(features, labels, k) {
+    pred <- knn(train = features, test = features, cl = labels, k = k,
+                prob = TRUE)
+    noObs <- length(labels)
+    bic <- -2*sum(log(attr(pred, "prob"))) + (noObs/k)*log(noObs)
+    return(c(k = k, error = bic))
+}
+
+bicScore <- foreach(k = ks, 
+                    .combine = rbind, 
+                    .packages = c("class", "dplyr")) %dopar% {
+                      
+    # some helpful debugging messages
+    #cat("The current test set! k=", k, "\n")
+      
+    # kNN results
+    resEasy <- getBIC(trainEasy$X, trainEasy$y, k)
+    resDiff <- getBIC(trainDiff$X, trainDiff$y, k)
+
+    # final output
+    data.frame(c("BIC", "BIC"), c("Easy", "Difficult"), 
+               rbind(resEasy, resDiff))
+}
+
+# prettyfying
+colnames(bicScore) <- c("cvType", "exp", "k", "Error")
+bicScore <- cbind(bicScore, SE=NA)
+
+# rescaling the results to range 0-1
+# so that we can illustrate it together with CV errors on the same figure
+er <- bicScore$Error
+bicScore$Error <- (er-min(er))/(max(er)- min(er))
+
+```
+
+
+### Test error & plotting all the results
+
+Finally, we need the real test error to evaluate the performance of our methods for estimating the generalization error.
+
+
+```{r, fig.width=7.3,  fig.height=8}
+
+# -----
+# Test error
+# -----
+
+# resubstitution function
+getTestError <- function(features, labels, k, testFeatures, testLabels) {
+    pred <- knn(train = features, test = testFeatures, cl = labels, k = k)
+    return(c(k = k, error = mean(pred != testLabels)))
+}
+
+testError <- foreach(k = ks, 
+                    .combine = rbind, 
+                    .packages = c("class", "dplyr")) %dopar% {
+                      
+    # some helpful debugging messages
+    #cat("The current test set! k=", k, "\n")
+      
+    # kNN results
+    resEasy <- getTestError(trainEasy$X, trainEasy$y, k, 
+                            testEasy$X, testEasy$y)
+    resDiff <- getTestError(trainDiff$X, trainDiff$y, k,
+                            testDiff$X, testDiff$y)
+
+    # final output
+    data.frame(c("Test", "Test"), c("Easy", "Difficult"), 
+               rbind(resEasy, resDiff))
+}
+
+registerDoSEQ()
+
+# prettifying
+colnames(testError) <- c("cvType", "exp", "k", "Error")
+testError <- cbind(testError, SE=NA)
+
+
+# -----
+# Combining all results in a single data frame
+# -----
+
+results <- rbind(resubError, looError, kfoldError, 
+                 mcError, bicScore, testError)
+
+# -----
+# Plotting
+# -----
+
+ggplot(data = results, 
+       aes(x = factor(k), y = Error, colour=cvType, group=cvType)) + 
+geom_line() + 
+geom_point() +
+facet_wrap(~exp, ncol=1) +
+scale_x_discrete("k -Number of nearest neighbors",
+                 breaks = c(1, seq(5,60,5))) +
+ylab("Misclassification error") +
+theme_bw(base_size = 14, base_family = "Helvetica") 
+
+```
+
+
+### Some practical tips
+
+- CV is quite expensive to do, especially when you have more than one complexity parameter. In practice you use it on smaller datasets.  
+- With the size of the data its advantage for estimating the generalization error decreases and the main reason - scarcity of the data is not an issue anymore. Hence, with big datsets, go with simple division of data on training, validation and test datasets.  
+- When implementing CV do not forget to randomly permute the data to ensure that each subset is representative.  
+- CV in time series is more tricky because of inter dependence of observations, in such situations train test split has to be done in chunks. You still have to assume way some issues to use it, but it is doable. It is sometimes called backtesting.
+
+
+
+# Classification trees (CART)
+
+
+Classification tree is another classifier that is simple to understand, yet powerful, particularly when combined with some of the ensemble techniques (bagging, random forests). The algorithms were originally developed by Ross Quinlan (ID3, 1986; C4.5, 1993) and Breimenetal (CART, 1984). 
+
+Below we implement a simplified version of classification tree classifier. We use a greedy algorithm. Starting with all of the data, consider splitting the input space on two halves with a split point $s$, and define a pair of half-planes or regions as follows: 
+
+$$ R_1 (s) = {X|X_i \le s} and R_2(s) = {X|X_i \ge s}. $$
+
+We search for a split point $s$ that solves
+
+$$ max_{s} [max_{k} \sum_{x_i \in R_1(s)} I(y_i = k) + max_{k} \sum_{x_i \in R_2(s)} I(y_i = k)] $$
+
+Here we have only a single dimension, but it is easy to generalize to a case of many variables. Inner maximization is solved by simple averages. That is, in case of multi-class problems, we classify the observations in region $m$ to class $k$
+
+$$ k(m) = argmax_k \frac{1}{N_m} \sum_{x_i \in R_m(s)} I(y_i = k), $$
+
+where $N_m$ is a number of observations in the region $m$. In our binary example this amounts to 
+
+$$ \hat{k}_1 = ave(y_i |x_i \in R_1 (s)) $$
+
+and 
+
+$$ \hat{k}_2 = ave(y_i |x_i \in R_2 (s)). $$
+
+Thus, the majority class in the region $m$ is the class given to all the points in the region. 
+
+The determination of the best split point $s$ can be done very quickly by going through all of the inputs and recording the error related to such split. Crucial part is the following - having found the best split, we partition the data into the two resulting regions and repeat the splitting process on each of the two regions. Then this process is repeated on all of the resulting regions. This is the main parameter of the model, $K$ number of iterations determines how deep we go and how large our tree will be. Note that splitting points are often called nodes. Final regions are also called leafs.
+
+After each such iteration, $k$, we evaluate all the splitting points found locally in that iteration. We compute the misclassification error for whole input space if a splitting point would be included, and we greedily accept the splitting point that has a minimum error. Thus, in each iteration $k$ we expand the tree with a single node. Maximum number of iterations we could do is thus $K=N-1$, and in that case every point in the input space has its own interval and is perfectly predicted.
+
+How large the tree should be? If we go too deep we might overfit the data, while with a small tree we might not capture the important structure. Tree size is a tuning parameter governing the model’s complexity, and it should be adaptively chosen from the data.
+
+The difference between the algorithm we show here and the usual approaches to classification trees is that they first grow the tree to the size $K$, but keeping all the nodes instead of keeping the best ones. In the second step the non-terminal nodes are pruned away; there are couple of procedures to do this, together with some additional parameters. The reason why this is a smarter approach is that our greedy strategy discards splits at one point that actually might have lead to a significant improvement down the road if left in the tree.  
+
+
+```{r, classTree}
+
+# lets first develop a function that will partition the input space, 
+# cut the input space exhaustively, count errors for each cut and
+# choose the best cut
+
+findThreshold <- function(x, y) {
+    
+    noPoints <- length(x)
+    errors <- rep(NA, noPoints-1)
+    thresholds <- rep(NA, noPoints-1)
+    splitLabels <- matrix(NA, ncol=2, nrow=noPoints-1)
+
+    # we go sequentially over each point and cut between that point and the
+    # closest neighbor
+    for (idx in 1:(noPoints-1)) {
+
+        # locate a potential threshold, a split between two points
+        potThres <- mean(x[idx:(idx+1)])
+
+        # check the classification error, when both sides, 
+        # are classified with mean label
+        predictedClasses <- rep(NA, noPoints)
+        meanLeft <- mean(y[x < potThres])
+        meanRight <- mean(y[x >= potThres])
+        if (meanLeft < 0.5) {
+            predictedClasses[x < potThres] <- 0
+        } else {
+            predictedClasses[x < potThres] <- 1
+        }
+        if (meanRight < 0.5) {
+            predictedClasses[x > potThres] <- 0
+        } else {
+            predictedClasses[x > potThres] <- 1
+        }
+        # error of this split
+        misError <- mean(predictedClasses != y)
+        
+        # recording the accuracy, thresholds and labels of 
+        # the splitted interval
+        errors[idx] <- misError
+        thresholds[idx] <- potThres
+        splitLabels[idx,] <- c(predictedClasses[x < potThres][1],
+                               predictedClasses[x > potThres][1])
+    }
+    # print(cbind(errors, thresholds, splitLabels))
+
+    # next we find the minimum and the best threshold
+    minError <- min(errors)
+    bestThreshold <- thresholds[which(errors==minError)]
+    # if more than 1 threshold has the same accuracy we choose one randomly
+    bestThreshold <- sample(bestThreshold, 1)
+
+    # what are the final labels of the best split?
+    labels <- splitLabels[which(thresholds==bestThreshold),]
+    # print(cbind(minError, bestThreshold, labels))
+
+    return(list(thres = bestThreshold, 
+                err = minError, 
+                labels = labels))
+}
+
+
+# next we develop the main function that will use findThreshold function
+# to find split points locally but decide between them in a greedy way
+# based on a global error
+
+simpleClassTree <- function(K, X, Y) {
+
+    # setting up the initial boundaries - whole interval, with each
+    # iteration of k this will expand
+    boundaries <- c(0, 1)
+
+    # iterating for K times, i.e. we iteratively split input space in an 
+    # empirically greedy way, keeping only the best split and adding it 
+    # to the boundaries, we stop after doing this K times
+    for (k in 1:K) {
+
+        # first we subset our input space according to the boundaries 
+        # found so far
+        intervals <- cut(X, boundaries, include.lowest = TRUE)
+        noIntervals <- length(levels(intervals))
+
+        # then we go over each subset and see what is the best splitting
+        # point locally in this subset, using the findThreshold function
+        thresholds <- rep(NA, noIntervals)
+        errors <- rep(NA, noIntervals)
+        splitLabels <- matrix(NA, ncol=2, nrow=noIntervals)
+        for (iter in 1:noIntervals) {
+            x <- X[intervals==levels(intervals)[iter]]
+            y <- Y[intervals==levels(intervals)[iter]]
+            # we skip if there is a single element in the interval
+            # nothing to split there
+            if (length(y)>1) {
+                # find the local splitting point
+                results <- findThreshold(x, y)
+                thresholds[iter] <- results$thres
+                splitLabels[iter,] <- results$labels
+
+                # add the potential threshold to our list of boundaries
+                boundariesHH <- c(boundaries, abs(results$thres))
+                boundariesHH <- sort(boundariesHH)
+
+                # add the signs of the new threshold which indicates what 
+                # is the label of the of newly splitted interval
+                if (k==1) {
+                    signsHH <- results$labels
+                } else {
+                    signsHH <- append(signs, results$labels[1], 
+                        after=which(boundariesHH==results$thres)-2)
+                    signsHH[which(boundariesHH==results$thres)] <- 
+                        results$labels[2]
+                }
+
+                # now we compute predictions with new boundaries based on the 
+                # potential split
+                predictedClasses <- cut(X, boundariesHH)
+                levels(predictedClasses) <- signsHH 
+
+                # we compute a global, overall error rate for this local
+                # modification, we do not use the local error to evaluate 
+                # the splitting point
+                errors[iter] <- mean(predictedClasses != Y)
+            }
+        }
+
+        # find the best threshold in this iteration, greedy strategy
+        minError <- min(errors, na.rm=TRUE)
+        bestThreshold <- thresholds[which(errors==minError)]
+        bestThreshold <- sample(bestThreshold, 1)
+        labels <- splitLabels[which(thresholds==bestThreshold),]
+
+        # add the new threshold to our list of boundaries
+        boundaries <- c(boundaries, abs(bestThreshold))
+        boundaries <- sort(boundaries)
+
+        # add the signs of the new threshold which indicates what is the label of the newly splitted interval
+        if (k==1) {
+            signs <- labels
+        } else {
+            signs <- append(signs, labels[1], 
+                after=which(boundaries==bestThreshold)-2)
+            signs[which(boundaries==bestThreshold)] <- labels[2]
+        }
+    }
+
+    # get the final predicted classes
+    predictedClasses <- cut(X, boundaries)
+    levels(predictedClasses) <- signs 
+
+    # now we evaluate the final accuracy, after K iterations
+    misError <- mean(predictedClasses != Y)
+
+
+    return(list(predictedClasses = predictedClasses, 
+                misError = misError,
+                boundaries = boundaries,
+                signs = signs))
+}
+
+```
+
+Note that one would use function `findThreshold` a lot in this type of classifier. Thus, greatest improvements in classifier efficiency can probably achieved by improving that part of the code. Most trees are actually recursive algorithms. R is relatively slow at recursion and it would pay off to implement that part in a fast compiler language like C++. As a shortcut we will see how we can use just-in-time (JIT) `compiler` package, which is extremely easy to use, to improve the efficiency of the code.
+
+
+
+## Deceivingly simple dataset
+
+To illustrate the classifier we use an artificial one dimensional dataset where we can easily modify the Bayes risk. We draw the input points from uniform distribution, $U(0,1)$ and determine the the class of the point according to the following function:  
+
+$$ P(Y=1|X=x) = \left\{
+        \begin{array}{ll}
+            0.5+\epsilon & if \quad x \in \cup_{i=1}^L I_i \\
+            0.5-\epsilon & \quad otherwise
+        \end{array}
+    \right. $$
+
+where $I_i$ is an interval with boundaries $0 \ge a_i,b_i \le 1$, and $L$ is number of intervals. Moreover, intervals do not overlap, $I_i \cap I_j,\forall i \neq j$.
+
+- Hastie?
+
+
+```{r, dataset}
+
+intervals_1D <- function(noObs, intervals, epsilon = 0.5, 
+                         seed = round(runif(1)*100000)) {
+    set.seed(seed)
+
+    # create 1D input points, where each observation is drawn independently
+    # from the uniform distribution, interval from 0 to 1
+    X <- runif(noObs)
+    X <- sort(X)
+
+    # create intervals dynamically with the help of parsing expressions,
+    # and verify which inputs fall into them
+    condition <- character()
+    for (i in 1:length(intervals)) {
+        if (i==1) {
+            express <- paste0("(X > ", intervals[[i]][1], " & X < ",
+                              intervals[[i]][2],")" )
+        } else {
+            express <- paste0(" | (X > ", intervals[[i]][1], " & X < ",
+                              intervals[[i]][2],")" )
+        } 
+        condition <- paste0(condition, express)
+    }
+    withinIntervals <- eval(parse(text = condition))
+
+    
+    # create classes
+    # 1 if within the intervals with probability 0.5 + epsilon, 
+    # 0 if outside of the intervals with probability 0.5 - epsilon
+    Y <- rep(NA, noObs)
+    Y[withinIntervals]  <- rbinom(sum(withinIntervals),  1, 0.5 + epsilon)
+    Y[!withinIntervals] <- rbinom(sum(!withinIntervals), 1, 0.5 - epsilon)
+
+    return(list(X=X, Y=Y))
+}
+
+
+# we create a dataset and illustrate it
+intervals <- list(c(0.09, 0.17), c(0.24, 0.37))
+data <- intervals_1D(50, intervals, 0.4, 12345)
+
+# plotting
+library(ggplot2)
+ggplot(data=as.data.frame(data), aes(x=X, y=Y, color=factor(Y))) +
+geom_point(shape=124, size=4) + 
+scale_color_manual("Class", values=c("blue", "red")) +
+coord_fixed(ratio=1/4) +
+theme_bw() +
+annotate("rect", 
+         xmin = intervals[[1]][1], 
+         xmax = intervals[[1]][2], 
+         ymin = 0, ymax = 1, alpha = .2) +
+annotate("rect", 
+         xmin = intervals[[2]][1], 
+         xmax = intervals[[2]][2], 
+         ymin = 0, ymax = 1, alpha = .2)
+
+```
+
+We have a probabilistic mapping between the input variable and its class for values of $\epsilon$ smaller than $1/2$. This is effectively the Bayes risk.This is why we see some points with label $1$ outside of the intervals (marked gray on the figure). 
+
+
+## Choosing the depth of the tree, $K$
+
+Not knowing the K parameter ex ante, how can we discover the optimal 
+number of K iterations? Let us examine the miss-classification error on the training dataset.
+
+
+```{r, examiningCtrees}
+
+# we create a dataset and illustrate it
+intervals <- list(c(0.09, 0.17), c(0.24, 0.37))
+epsilon <- 0.4
+data <- intervals_1D(500, intervals, epsilon, 1234)
+
+# range of K's, i.e. number of splits, has to be less than number of points
+Ks <- 1:100
+
+start_time <- Sys.time()
+misError <- rep(NA, length(Ks))
+for (K in Ks) {
+    # print(K)
+    classResults <- simpleClassTree(K, data$X, data$Y)
+    misError[K]  <- classResults$misError
+}
+end_time <- Sys.time()
+end_time - start_time
+
+
+# lets see how we can use compiler package to potentially speed up our 
+# code for free (up to 5x on avg), without much work
+library(compiler)
+# we simply pass the function we want to use through cmpfun()
+findThreshold <- cmpfun(findThreshold)
+
+start_time <- Sys.time()
+misError <- rep(NA, length(Ks))
+for (K in Ks) {
+    # print(K)
+    classResults <- simpleClassTree(K, data$X, data$Y)
+    misError[K]  <- classResults$misError
+}
+end_time <- Sys.time()
+end_time - start_time
+
+# not such a big difference on this dataset, about 10% improvement 
+
+# reshaping the data a bit and plotting
+df <- data.frame(K=Ks, Error=misError)
+ggplot(data = df, aes(x = K, y = Error)) + 
+geom_line() + 
+geom_point() +
+xlab("K") +
+ylab("Misclassification error") +
+theme_bw(base_size = 14, base_family = "Helvetica") +
+annotate("text", x = 45, y = .15, 
+         label = paste0("epsilon==", epsilon), 
+         parse=TRUE)
+
+```
+
+Sudden peaks are due to some randomness in choosing the splitting point if all the nodes at k iteration lead to exactly the same classification error. While in a single run, over iterations the error can only decrease, here we have many runs where each runs until its $K$ parameter, and due to this randomness they might not get down to the same error level even though more iterations were performed. In general, errors go toward zero as $K$ increases. Taking in the account that we used epsilon smaller than 0.5, we know that this cannot be the truth. 
+
+Behavior looks similar to optimizing the k parameter in the nearest neighbor classifier. Indeed, similar to 1NN, if we let the tree split all data points ($N-1$ nodes), tree classifier would classify the training data perfectly. However, same as with kNN classifier, the fact that it does perfectly on the training set does not mean it would do well on the new data. In the case above it is obvious that the classification tree has fitted noisy observations. As we examine more systematically below, this problem will worsen the more probabilistic our function $f(x)=Y$ is, as $\epsilon$ decreases to zero.
+
+
+```{r, testErrors, fig.width=7.3,  fig.height=10}
+
+# we do it more systematically
+intervals <- list(c(0.09, 0.17), 
+                  c(0.24, 0.37), 
+                  c(0.51, 0.53), 
+                  c(0.67, 0.7),
+                  c(0.91, 0.97))
+epsilons <- seq(0, 0.5, 0.1)
+Ks <- 1:40
+noObs <- 300
+
+errorTraining <- errorTest <- vector("list", 5)
+for (eps in 1:length(epsilons)) {
+
+    # estimating trees on the training data
+    epsilon <- epsilons[eps]
+    data <- intervals_1D(noObs, intervals, epsilon, 1000+eps)
+
+    misError <- rep(NA, length(Ks))
+    boundaries <- vector("list", length(Ks))
+    labels <- vector("list", length(Ks))
+    for (K in Ks) {
+        #print(K)
+        classResults <- simpleClassTree(K, data$X, data$Y)
+        misError[K]  <- classResults$misError
+        boundaries[[K]]  <- classResults$boundaries
+        labels[[K]]  <- classResults$signs
+    }
+    errorTraining[[eps]] <- misError
+
+    # using estimated trees on the new test data
+    misErrorTest <- rep(NA, length(Ks))
+    for (K in Ks) {
+        #print(K)
+        # we draw new dataset 100 times, evaluate and then average the error
+        errorsSim <- rep(NA, 100)
+        for (iter in 1:100) {
+            # new test dataset
+            data <- intervals_1D(noObs*5, intervals, epsilon)
+
+            # predict on the new dataset
+            predictedClasses <- cut(data$X, boundaries[[K]])
+            levels(predictedClasses) <- labels[[K]] 
+
+            # now we evaluate the final accuracy, after K iterations
+            errorsSim[iter] <- mean(predictedClasses != data$Y)
+        }
+        # final test error, avg over all iterations        
+        misErrorTest[K]  <- mean(errorsSim)
+    }
+    errorTest[[eps]] <- misErrorTest
+}
+
+
+
+# reshaping the data a bit and plotting
+df <- data.frame(K = rep(Ks, length(epsilons)*2), 
+                 epsilon = rep(epsilons, each=length(Ks), 2),
+                 Error=c(unlist(errorTraining), unlist(errorTest)), 
+                 Type=c(rep("Training", length(Ks)*length(epsilons)), 
+                        rep("Test", length(Ks)*length(epsilons))))
+
+ggplot(data = df, aes(x = K, y = Error, color = Type)) + 
+geom_line() + 
+geom_point() +
+facet_wrap(~epsilon, ncol=2) + 
+scale_color_manual("Error type", values=c("blue", "red")) +
+xlab("K") +
+ylab("Misclassification error") +
+theme_bw(base_size = 14, base_family = "Helvetica") 
+
+```
+
+Optimal classifier for this particular problem can be found in the appendix of [this paper](http://www.cc.gatech.edu/home/isbell/classes/reading/papers/ml97-modelselection.pdf). You can find it in your `Box/resources` folder.
+
+
+
+## Classification tree packages
+
+The functions from `rpart` package are very fast since they are implemented in C++. Some other packages that I am less familiar with that also have classification trees: `C50`, `tree`, `evtree`.
+
+```{r, rpart}
+# dataset
+intervals <- list(c(0.09, 0.17), c(0.24, 0.37))
+epsilon <- 0.4
+data <- intervals_1D(100, intervals, epsilon, 1234)
+
+
+# install.packages("rpart")
+library(rpart)
+
+# grow tree 
+fit <- rpart(data$Y ~ data$X, method="class")
+
+printcp(fit)  # display the results 
+plotcp(fit)   # visualize cross-validation results 
+summary(fit)  # detailed summary of splits
+
+plot(fit, uniform=TRUE, main="Classification Tree")
+text(fit, use.n=TRUE, all=TRUE, cex=.8)
+```
+
+
+## Random forests
+
+As we saw above, classification trees have a tendency to overfit the training data. What can we do if we do not have enough data to do the cross-validation? Ensemble methods to the rescue!
+
+Particularly popular ensemble method that is based on classification tree is called **random forests**. Random forests use boostrap procedure where new training samples are created by randomly drawing points from the original training data with replacement. Then for each point that has to be predicted we have not a single classification tree but a whole "forest" of them. We classify a point using each tree, and deciding a final predicted outcome by combining the results across all of the trees - a majority vote. You can find random forest classifier in the `randomForest` package.
+
+
+
+
+# References
+
+- For cross-validation see Bishop (2007): 1.3, 3.4, and Hastie, Tibshirani, Friedman (2013): Chapter 7.  
+- For classification trees see Hastie et al (2013) section  9.2   
+- Nando De Freitas lectre on decision trees on [Youtube](https://www.youtube.com/watch?v=-dCtJjlEEgM Nando!).
+
+
